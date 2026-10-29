@@ -3,7 +3,6 @@ import pandas as pd
 import datetime
 import calendar
 import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
 import io
 
 st.title("근무 일정 자동 생성 프로그램")
@@ -80,7 +79,7 @@ if st.button("스케줄 생성하기"):
     business_days = []
     
     for week in cal:
-        for i, day in enumerate(week[:5]): # 월~금
+        for i, day in enumerate(week[:5]):
             if day != 0:
                 date_obj = datetime.date(target_year, target_month, day)
                 day_name = ["월", "화", "수", "목", "금"][i]
@@ -99,19 +98,15 @@ if st.button("스케줄 생성하기"):
         d_name = bday["day_name"]
         d_date = bday["date"]
         
-        # 오픈 인원 1명 선정
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
         avail_open.sort(key=lambda x: staff_counts[x]["open"] + staff_counts.get(x, {}).get("prev_open", 0))
         selected_open = avail_open[0] if avail_open else ""
         
-        # 마감 인원 1명 선정 (김상혁은 월, 수 마감 고정)
         avail_close = close_input.get(d_name, [])
         if d_name in ["월", "수"] and "김상혁" in avail_close:
             selected_close = "김상혁"
         else:
             other_avail = [s for s in avail_close if s != "김상혁"]
             other_avail.sort(key=lambda x: staff_counts[x]["close"] + staff_counts.get(x, {}).get("prev_close", 0))
-            selected_close = other_avail[0] if other_avail else ("김상혁" if d_name in ["월", "수"] else "")
-        
-        if selected
+            selected_close = other_avail[0] if
