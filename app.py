@@ -193,20 +193,150 @@ def solve_with_rules(slots, avail, quotas, slot_week, conflicts, caps, ratio_cap
     return (dict(owner), "ok") if ok else (None, "infeasible")
 
 
-def solve_schedule(slots, avail, quotas, slot_week, slot_date, rules, node_limit=40000):
-    """주간 상한/오픈·마감 비중 상한을 단계적으로 완화(0 -> +1 -> +2 -> 없음)하며 해 탐색.
+def solve_schedule(slots, avail, quotas, slot_week, slot_date, rules, node_limit=15000):
+    """1) 주별/오픈·마감 상한 없이 가능한지 먼저 판정(불가능하면 즉시 종료)
+    2) 가능하면 상한을 단계적으로 완화(0 -> +1 -> +2)하며 가장 균등한 해 탐색, 모두 실패하면 1)의 해 사용.
     반환 (owner, slack, week_caps, ratio_caps, status)"""
     conflicts = build_conflicts(slots, slot_date, rules)
-    levels = [0, 1, 2, None] if (rules.get("weekly") or rules.get("balance")) else [None]
-    status = "infeasible"
-    for slack in levels:
-        wcaps = build_week_caps(slots, slot_week, quotas, slack) if rules.get("weekly") else None
-        rcaps = build_ratio_caps(slots, quotas, slack) if rules.get("balance") else None
-        limit = node_limit * 3 if slack is None else node_limit
-        owner, status = solve_with_rules(slots, avail, quotas, slot_week, conflicts, wcaps, rcaps, limit)
-        if owner is not None:
-            return owner, slack, wcaps, rcaps, "ok"
-    return None, None, None, None, status
+    base_owner, status = solve_with_rules(slots, avail, quotas, slot_week, conflicts, None, None, node_limit)
+    if base_owner is None:
+        return None, None, None, None, status
+    if rules.get("weekly") or rules.get("balance"):
+        for slack in [0, 1, 2]:
+            wcaps = build_week_caps(slots, slot_week, quotas, slack) if rules.get("weekly") else None
+            rcaps = build_ratio_caps(slots, quotas, slack) if rules.get("balance") else None
+            owner, _ = solve_with_rules(slots, avail, quotas, slot_week, conflicts, wcaps, rcaps, max(node_limit // 3, 1500))
+            if owner is not None:
+                return owner, slack, wcaps, rcaps, "ok"
+    return base_owner, None, None, None, "ok"
+
+
+def build_month_slots(business_days, open_input, close_input):
+    """월 전체 슬롯/가용 인원/주차/날짜 구성 (월·수 마감은 김상혁 고정이라 제외)"""
+    slots, avail, slot_week, slot_date = [], {}, {}, {}
+    for idx, bday in enumerate(business_days):
+        d_name, d_date = bday["day_name"], bday["date"]
+        slot_date[idx] = d_date
+        so = (idx, "오픈")
+        slots.append(so)
+        slot_week[so] = get_week_idx(d_date)
+        avail[so] = [x for x in open_input.get(d_name, []) if x != "김상혁"]
+        if d_name not in ["월", "수"]:
+            sc = (idx, "마감")
+            slots.append(sc)
+            slot_week[sc] = get_week_idx(d_date)
+            avail[sc] = [x for x in close_input.get(d_name, []) if x != "김상혁"]
+    return slots, avail, slot_week, slot_date
+
+
+def waterfill_quotas(prev, n):
+    """최종 누적이 최대한 같아지도록 n개 슬롯을 배분. 반환 (기본 쿼터, 동점 그룹, 그룹에서 +1 받을 인원 수)"""
+    q = {p: 0 for p in prev}
+    remaining = n
+    while remaining > 0:
+        cur = {p: prev[p] + q[p] for p in prev}
+        m = min(cur.values())
+        group = sorted(p for p in prev if cur[p] == m)
+        if remaining >= len(group):
+            for p in group:
+                q[p] += 1
+            remaining -= len(group)
+        else:
+            return q, group, remaining
+    return q, [], 0
+
+
+def compute_initial_quotas(business_days, open_input, close_input, general_staff, staff_prev, rules):
+    """1단계 슬라이더 초기값: 최종 누적 균등 기준 쿼터.
+    1) 이전 누적이 많은 사람이 가장 적게 받음  2) 동점자 중 선택은 체크된 조건을 가장 잘 만족하는 쪽을 자동 선택
+    3) 가용 인원 때문에 불가능하면 가장 가까운 가능한 쿼터로 조정. 반환 (쿼터 dict, 안내 문구 또는 None)"""
+    import itertools
+    slots, avail, slot_week, slot_date = build_month_slots(business_days, open_input, close_input)
+    prev = {p: staff_prev.get(p, 0) for p in general_staff}
+    base, tied, k = waterfill_quotas(prev, len(slots))
+
+    cands = []
+    if k > 0:
+        order = sorted(tied, key=lambda p: (prev[p], p))
+        v = prev[order[k - 1]]
+        sure = [p for p in order if prev[p] < v]
+        border = [p for p in order if prev[p] == v]
+        need = k - len(sure)
+        for comb in itertools.combinations(border, need):
+            q = dict(base)
+            for p in sure + list(comb):
+                q[p] += 1
+            cands.append(q)
+    else:
+        cands.append(dict(base))
+
+    # 1) 체크된 조건을 가장 잘 만족하는 후보 선택
+    best = None
+    for q in cands:
+        o, slack, _, _, _ = solve_schedule(slots, avail, q, slot_week, slot_date, rules, node_limit=4000)
+        if o is not None:
+            sl = 99 if slack is None else slack
+            if best is None or sl < best[0]:
+                best = (sl, q)
+            if sl == 0:
+                break
+    if best:
+        return best[1], None
+
+    # 2) 조건 없이 가용 인원만 만족하는 후보
+    for q in cands:
+        o, f = solve_quota_matching(slots, avail, q)
+        if f is None:
+            labels = {"close_open": "마감 직후 오픈 피하기", "same_day": "같은 날 오픈·마감 중복 피하기",
+                      "consec_open": "연일 오픈 피하기", "weekly": "주별 쏠림 방지", "balance": "오픈·마감 비중 균등"}
+            hint = []
+            for key, on in rules.items():
+                if on:
+                    trial = dict(rules)
+                    trial[key] = False
+                    o2, _, _, _, _ = solve_schedule(slots, avail, q, slot_week, slot_date, trial, node_limit=4000)
+                    if o2 is not None:
+                        hint.append(labels.get(key, key))
+            msg = "체크된 배정 조건을 모두 만족하는 쿼터를 찾지 못해, 가용 인원만 만족하는 쿼터로 초기화했습니다."
+            if hint:
+                msg += " 다음 조건 중 하나를 해제하면 2단계에서 해가 나옵니다: " + ", ".join(hint) + "."
+            else:
+                msg += " 2단계에서 오류가 나면 조건을 일부 해제하세요."
+            return q, msg
+
+    # 3) 이상적 쿼터에서 가장 가까운 가능한 쿼터 탐색 (1명→1명 이동 최대 3번)
+    ideal = cands[0]
+
+    def spread(q):
+        f = [prev[p] + q[p] for p in prev]
+        return max(f) - min(f)
+
+    frontier = [ideal]
+    seen = {tuple(sorted(ideal.items()))}
+    for depth in range(1, 4):
+        nxt = []
+        for q in frontier:
+            for a in sorted(prev):
+                if q[a] <= 0:
+                    continue
+                for b in sorted(prev):
+                    if a == b:
+                        continue
+                    q2 = dict(q)
+                    q2[a] -= 1
+                    q2[b] += 1
+                    key = tuple(sorted(q2.items()))
+                    if key not in seen:
+                        seen.add(key)
+                        nxt.append(q2)
+        nxt.sort(key=lambda q: (spread(q), tuple(sorted(q.items()))))
+        for q2 in nxt[:400]:
+            o, f = solve_quota_matching(slots, avail, q2)
+            if f is None:
+                diff = ", ".join(f"{p} {q2[p] - ideal[p]:+d}" for p in sorted(prev) if q2[p] != ideal[p])
+                return q2, f"가용 인원 제약 때문에 누적 균등 쿼터에서 조정했습니다({diff})."
+        frontier = nxt[:40]
+    return ideal, "가용 인원 제약으로 균등 쿼터를 확정하지 못했습니다. 슬라이더를 직접 조절하세요."
 
 
 st.title("근무 일정 자동 생성 프로그램")
@@ -325,32 +455,15 @@ if st.button("1단계: 날짜 설정 및 완벽한 초기 스케줄 시뮬레이
     if "staff_counts" in st.session_state:
         del st.session_state["staff_counts"]
 
-    sanghyuk_closes = sum(1 for bday in business_days if bday["day_name"] in ["월", "수"])
-    sim_staff_counts = {s: {"open": 0, "close": 0} for s in staff_names}
-
-    for bday in business_days:
-        d_name = bday["day_name"]
-
-        avail_open = [s for s in open_input.get(d_name, []) if s != "김상혁"]
-        if not avail_open:
-            avail_open = general_staff
-        avail_open.sort(key=lambda x: sim_staff_counts[x]["open"] + sim_staff_counts[x]["close"])
-        sel_o = avail_open[0]
-        sim_staff_counts[sel_o]["open"] += 1
-
-        if d_name in ["월", "수"]:
-            sim_staff_counts["김상혁"]["close"] += 1
-        else:
-            avail_close = [s for s in close_input.get(d_name, []) if s != "김상혁"]
-            if not avail_close:
-                avail_close = general_staff
-            avail_close.sort(key=lambda x: sim_staff_counts[x]["open"] + sim_staff_counts[x]["close"])
-            sel_c = avail_close[0]
-            sim_staff_counts[sel_c]["close"] += 1
-
-    optimal_nov_quotas = {}
-    for s in general_staff:
-        optimal_nov_quotas[s] = sim_staff_counts[s]["open"] + sim_staff_counts[s]["close"]
+    quota_rules = {
+        "close_open": st.session_state.get("rule_close_open", True),
+        "same_day": st.session_state.get("rule_same_day", True),
+        "consec_open": st.session_state.get("rule_consec_open", True),
+        "weekly": st.session_state.get("rule_weekly", True),
+        "balance": st.session_state.get("rule_balance", True),
+    }
+    optimal_nov_quotas, quota_note = compute_initial_quotas(business_days, open_input, close_input, general_staff, staff_prev, quota_rules)
+    st.session_state.quota_note = quota_note
 
     st.session_state.optimal_nov_quotas = optimal_nov_quotas
     st.success("완벽하게 100% 성공하는 초기 모범 스케줄 시뮬레이션 및 슬라이더 초기화가 완료되었습니다!")
@@ -375,6 +488,8 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
     required_nov = total_open_slots + total_general_close_slots
 
     st.info(f"총 영업일수: {total_business_days}일 (오픈 총 {total_open_slots}개, 일반 마감 총 {total_general_close_slots}개 | 총 배정 필요 횟수: {required_nov}회)")
+    if st.session_state.get("quota_note"):
+        st.info(st.session_state.quota_note)
 
     user_final_cumulatives = {}
     max_slider_limit = required_nov
@@ -543,7 +658,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                     for k in active:
                         trial = dict(rules)
                         trial[k] = False
-                        o2, _, _, _, st2 = solve_schedule(slots, avail, quotas, slot_week, slot_date, trial, node_limit=20000)
+                        o2, _, _, _, st2 = solve_schedule(slots, avail, quotas, slot_week, slot_date, trial, node_limit=8000)
                         if o2 is not None:
                             relax_ok.append(rule_names[k])
                     if rstatus == "limit":
