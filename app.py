@@ -4,6 +4,7 @@ import datetime
 import calendar
 import os
 import urllib.request
+import re as _re
 
 try:
     import matplotlib.pyplot as plt
@@ -405,6 +406,106 @@ b.onclick = async () => {
     )
 
 
+# ---------------- 공휴일 / 대체공휴일 기반 ----------------
+FIXED_HOLIDAYS = [(1, 1, "신정"), (3, 1, "삼일절"), (5, 5, "어린이날"), (6, 6, "현충일"),
+                  (8, 15, "광복절"), (10, 3, "개천절"), (10, 9, "한글날"), (12, 25, "성탄절")]
+
+# 음력 기반 공휴일 (연도별 날짜는 직접 입력한 기본 데이터. 틀리면 화면의 '추가·수정 휴무일'에서 보정)
+LUNAR_HOLIDAYS = {
+    2024: {"설날": [(2, 9, "설 연휴"), (2, 10, "설날"), (2, 11, "설 연휴")], "부처님오신날": [(5, 15, "부처님오신날")],
+           "추석": [(9, 16, "추석 연휴"), (9, 17, "추석"), (9, 18, "추석 연휴")]},
+    2025: {"설날": [(1, 28, "설 연휴"), (1, 29, "설날"), (1, 30, "설 연휴")], "부처님오신날": [(5, 5, "부처님오신날")],
+           "추석": [(10, 5, "추석 연휴"), (10, 6, "추석"), (10, 7, "추석 연휴")]},
+    2026: {"설날": [(2, 16, "설 연휴"), (2, 17, "설날"), (2, 18, "설 연휴")], "부처님오신날": [(5, 24, "부처님오신날")],
+           "추석": [(9, 24, "추석 연휴"), (9, 25, "추석"), (9, 26, "추석 연휴")]},
+    2027: {"설날": [(2, 6, "설 연휴"), (2, 7, "설날"), (2, 8, "설 연휴")], "부처님오신날": [(5, 13, "부처님오신날")],
+           "추석": [(9, 14, "추석 연휴"), (9, 15, "추석"), (9, 16, "추석 연휴")]},
+    2028: {"설날": [(1, 26, "설 연휴"), (1, 27, "설날"), (1, 28, "설 연휴")], "부처님오신날": [(5, 2, "부처님오신날")],
+           "추석": [(10, 2, "추석 연휴"), (10, 3, "추석"), (10, 4, "추석 연휴")]},
+    2029: {"설날": [(2, 12, "설 연휴"), (2, 13, "설날"), (2, 14, "설 연휴")], "부처님오신날": [(5, 20, "부처님오신날")],
+           "추석": [(9, 21, "추석 연휴"), (9, 22, "추석"), (9, 23, "추석 연휴")]},
+    2030: {"설날": [(2, 2, "설 연휴"), (2, 3, "설날"), (2, 4, "설 연휴")], "부처님오신날": [(5, 9, "부처님오신날")],
+           "추석": [(9, 11, "추석 연휴"), (9, 12, "추석"), (9, 13, "추석 연휴")]},
+}
+
+# 선거일·임시공휴일 등 (필요한 것만 기본 포함)
+EXTRA_HOLIDAYS = {
+    datetime.date(2024, 4, 10): "국회의원선거일",
+    datetime.date(2024, 10, 1): "임시공휴일",
+    datetime.date(2025, 1, 27): "임시공휴일",
+    datetime.date(2025, 6, 3): "대통령선거일",
+    datetime.date(2026, 6, 3): "전국동시지방선거일",
+}
+
+
+def get_holiday_map(year, extra_text=""):
+    """{날짜: 표시 이름}. 고정 공휴일 + 음력 공휴일 + 대체공휴일 + 직접 입력.
+    직접 입력: 한 줄에 'YYYY-MM-DD 이름' (추가/수정), 'YYYY-MM-DD' 앞에 '-'를 붙이면 해당 날짜 공휴일 해제"""
+    td = datetime.timedelta
+    hol = {}
+
+    def add(d, n):
+        hol.setdefault(d, []).append(n)
+
+    units = []  # (종류, 날짜들, 이름)
+    for m, d, n in FIXED_HOLIDAYS:
+        dt = datetime.date(year, m, d)
+        add(dt, n)
+        if n == "어린이날":
+            units.append(("kids", [dt], n))
+        elif n in ("삼일절", "광복절", "개천절", "한글날", "성탄절"):
+            units.append(("weekend", [dt], n))
+    for name, days in LUNAR_HOLIDAYS.get(year, {}).items():
+        dts = []
+        for m, d, label in days:
+            dt = datetime.date(year, m, d)
+            add(dt, label)
+            dts.append(dt)
+        units.append(("group" if name in ("설날", "추석") else "weekend", dts, name))
+    for dt, n in EXTRA_HOLIDAYS.items():
+        if dt.year == year:
+            add(dt, n)
+
+    subs = {}
+
+    def next_free(d):
+        d += td(days=1)
+        while d.weekday() >= 5 or d in hol or d in subs:
+            d += td(days=1)
+        return d
+
+    for kind, dts, name in sorted(units, key=lambda u: u[1][0]):
+        if kind == "group":
+            need = any(d.weekday() == 6 for d in dts) or any(len(hol[d]) > 1 for d in dts)
+        elif kind == "kids":
+            need = dts[0].weekday() >= 5 or len(hol[dts[0]]) > 1
+        else:
+            need = dts[0].weekday() >= 5
+        if need:
+            subs[next_free(dts[-1])] = "대체공휴일"
+
+    result = {d: "·".join(dict.fromkeys(ns)) for d, ns in hol.items()}
+    result.update(subs)
+
+    for line in (extra_text or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        remove = line.startswith("-")
+        if remove:
+            line = line[1:].strip()
+        parts = line.split(None, 1)
+        try:
+            d = datetime.date.fromisoformat(parts[0])
+        except Exception:
+            continue
+        if remove:
+            result.pop(d, None)
+        else:
+            result[d] = parts[1].strip() if len(parts) > 1 else "휴무일"
+    return result
+
+
 st.title("근무 일정 자동 생성 프로그램")
 
 if "schedule_df" not in st.session_state:
@@ -485,19 +586,31 @@ with col1:
 with col2:
     target_month = st.number_input("월", min_value=1, max_value=12, value=11)
 
+with st.expander("공휴일 설정 (공휴일·대체공휴일 자동 반영)"):
+    exclude_holidays = st.checkbox("공휴일·대체공휴일은 근무에서 제외", value=True, key="exclude_holidays")
+    holiday_extra = st.text_area(
+        "추가·수정 휴무일 (한 줄에 'YYYY-MM-DD 이름', 날짜 앞에 -를 붙이면 그 날짜의 공휴일을 해제)",
+        value="", height=90, key="holiday_extra")
+
 if st.button("1단계: 날짜 설정 및 완벽한 초기 스케줄 시뮬레이션"):
     calendar.setfirstweekday(calendar.SUNDAY)
     cal = calendar.monthcalendar(target_year, target_month)
     business_days = []
+    holiday_map_now = get_holiday_map(target_year, holiday_extra)
 
     for week in cal:
         for i, day in enumerate(week):
             if day != 0 and i in [1, 2, 3, 4, 5]:
                 date_obj = datetime.date(target_year, target_month, day)
+                if exclude_holidays and date_obj in holiday_map_now:
+                    continue
                 day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
 
     st.session_state.business_days = business_days
+    excl = [f"{d.month}/{d.day}({n})" for d, n in sorted(holiday_map_now.items())
+            if d.year == target_year and d.month == target_month and d.weekday() < 5]
+    st.session_state.holiday_note = ("근무에서 제외된 공휴일: " + ", ".join(excl)) if (exclude_holidays and excl) else None
 
     staff_prev = {}
     for staff in staff_names:
@@ -556,6 +669,8 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
     st.info(f"총 영업일수: {total_business_days}일 (오픈 총 {total_open_slots}개, 일반 마감 총 {total_general_close_slots}개 | 총 배정 필요 횟수: {required_nov}회)")
     if st.session_state.get("quota_note"):
         st.info(st.session_state.quota_note)
+    if st.session_state.get("holiday_note"):
+        st.info(st.session_state.holiday_note)
 
     user_final_cumulatives = {}
     max_slider_limit = required_nov
@@ -824,10 +939,6 @@ if "schedule_results" in st.session_state:
     sched_dict = {item["일"]: {"오픈": item["오픈"], "마감": item["마감"]} for item in st.session_state.schedule_results}
 
     if HAS_MATPLOTLIB:
-        fig, ax = plt.subplots(figsize=(10, 8))
-        ax.axis('off')
-
-        col_labels = ["일", "월", "화", "수", "목", "금", "토"]
         cell_text = []
 
         for week in month_matrix:
@@ -844,16 +955,64 @@ if "schedule_results" in st.session_state:
                     row_str.append(text_val)
             cell_text.append(row_str)
 
-        table = ax.table(cellText=cell_text, colLabels=col_labels, loc='center', cellLoc='center')
-        table.scale(1, 3)
+        # --- 구글 시트 스타일 달력 이미지 (위에서 만든 cell_text를 그대로 읽어서 그림) ---
+        def _short(name):
+            return name[1:] if len(name) == 3 else name
 
-        plt.title(f"{target_year}년 {target_month}월 근무 일정표", fontsize=16, pad=20)
+        RED, BLUE, GRID = "#d93025", "#3f51d9", "#d4d4d4"
+        n_rows = len(month_matrix)
+        fig_w, title_h, head_h, row_h = 10.0, 0.55, 0.45, 1.35
+        fig_h = title_h + head_h + n_rows * row_h
+        cw = fig_w / 7
+
+        fig = plt.figure(figsize=(fig_w, fig_h), facecolor="white")
+        ax = fig.add_axes([0, 0, 1, 1])
+        ax.set_xlim(0, fig_w)
+        ax.set_ylim(0, fig_h)
+        ax.axis("off")
+
+        ax.text(0.08, fig_h - title_h / 2, f"{target_year}년 {target_month}월 근무표 (오픈 / 마감)",
+                fontsize=15, fontweight="bold", va="center", ha="left")
+
+        head_top = fig_h - title_h
+        head_bottom = head_top - head_h
+        for c, lab in enumerate(["일 SUN", "월 MON", "화 TUE", "수 WED", "목 THU", "금 FRI", "토 SAT"]):
+            ax.text(c * cw + cw / 2, head_top - head_h / 2, lab, ha="center", va="center",
+                    fontsize=12, fontweight="bold", color=RED if c == 0 else BLUE if c == 6 else "black")
+
+        for y in [head_top, head_bottom] + [head_bottom - (r + 1) * row_h for r in range(n_rows)]:
+            ax.plot([0, fig_w], [y, y], color=GRID, lw=1.0, solid_capstyle="butt")
+        for k in range(8):
+            ax.plot([k * cw, k * cw], [0, head_top], color=GRID, lw=1.0, solid_capstyle="butt")
+
+        holiday_map = get_holiday_map(target_year, st.session_state.get("holiday_extra", ""))
+
+        for r, row in enumerate(month_matrix):
+            y_top = head_bottom - r * row_h
+            for c, day in enumerate(row):
+                if day == 0:
+                    continue
+                x0 = c * cw
+                hol_name = holiday_map.get(datetime.date(target_year, target_month, day))
+                num_color = RED if (c == 0 or hol_name) else BLUE if c == 6 else "black"
+                if c in (0, 6):
+                    ax.text(x0 + cw - 0.1, y_top - 0.1, str(day), ha="right", va="top", fontsize=12, color=num_color)
+                else:
+                    ax.text(x0 + 0.1, y_top - 0.1, str(day), ha="left", va="top", fontsize=12, color=num_color)
+                mt = _re.match(r"(\d+)일\n오픈: (.+)\n마감: (.+)", cell_text[r][c])
+                if mt:
+                    ax.text(x0 + 0.1, y_top - row_h * 0.46, f"{_short(mt.group(2).strip())} / {_short(mt.group(3).strip())}",
+                            ha="left", va="center", fontsize=12.5, color="black")
+                if hol_name:
+                    ax.text(x0 + 0.1, y_top - row_h * (0.66 if mt else 0.46), f"({hol_name})",
+                            ha="left", va="center", fontsize=12, color=RED)
 
         buf = io.BytesIO()
-        plt.savefig(buf, format="png", bbox_inches="tight")
+        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", pad_inches=0.08, facecolor="white")
         buf.seek(0)
 
         st.pyplot(fig)
+        plt.close(fig)
 
         dl_col, cp_col = st.columns(2)
         with dl_col:
@@ -1016,6 +1175,14 @@ if "schedule_results" in st.session_state:
         summary.append(("오픈·마감 비중 균등 (적용 중)", not balance_problems, "개인별 상한 이내" if not balance_problems else "; ".join(balance_problems)))
     else:
         summary.append(("오픈·마감 비중 균등 (해제됨, 참고)", True, "한쪽만 근무한 인원 없음" if not one_sided else "한쪽만 근무: " + "; ".join(one_sided)))
+
+    hol_v = get_holiday_map(target_year, st.session_state.get("holiday_extra", ""))
+    hol_sched = [f"{target_month}/{d}({hol_v[datetime.date(target_year, target_month, d)]})" for d in sorted(parsed)
+                 if datetime.date(target_year, target_month, d) in hol_v]
+    if st.session_state.get("exclude_holidays", True):
+        summary.append(("공휴일·대체공휴일 근무 배정 없음 (적용 중)", not hol_sched, "배정 없음" if not hol_sched else "; ".join(hol_sched)))
+    else:
+        summary.append(("공휴일 근무 배정 (제외 해제됨, 참고)", True, "해당 없음" if not hol_sched else "배정됨: " + "; ".join(hol_sched)))
 
     all_pass = all(ok for _, ok, _ in summary)
     if all_pass:
