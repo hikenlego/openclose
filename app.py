@@ -114,14 +114,15 @@ with col2:
     target_month = st.number_input("월", min_value=1, max_value=12, value=11)
 
 if st.button("스케줄 생성하기"):
+    # 표준 월요일 시작 달력으로 영업일 추출 (월~금은 인덱스 0~4)
     cal = calendar.monthcalendar(target_year, target_month)
     business_days = []
     
     for week in cal:
         for i, day in enumerate(week):
-            if day != 0 and i in [1, 2, 3, 4, 5]:
+            if day != 0 and i in [0, 1, 2, 3, 4]:
                 date_obj = datetime.date(target_year, target_month, day)
-                day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
+                day_name = ["월", "화", "수", "목", "금", "토", "일"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
     schedule_results = []
@@ -137,7 +138,7 @@ if st.button("스케줄 생성하기"):
         d_name = bday["day_name"]
         d_date = bday["date"]
         
-        # 전체 총 근무 횟수 기준 오름차순 정렬 (이전 누적 총합 + 당월 총합)
+        # 총계 편차 1 이내 유지를 위한 전체 총합 기준 정렬
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
         avail_open.sort(key=lambda x: (
@@ -220,8 +221,10 @@ if "schedule_results" in st.session_state:
 
     st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
     
-    calendar.setfirstweekday(calendar.SUNDAY)
-    month_matrix = calendar.monthcalendar(target_year, target_month)
+    # 이미지 출력 시 일요일 시작 형태로 변환 ([월,화,수,목,금,토,일] -> [일,월,화,수,목,금,토])
+    raw_matrix = calendar.monthcalendar(target_year, target_month)
+    month_matrix = [[week[-1]] + week[:-1] for week in raw_matrix]
+    
     sched_dict = {item["일"]: {"오픈": item["오픈"], "마감": item["마감"]} for item in st.session_state.schedule_results}
     
     if HAS_MATPLOTLIB:
