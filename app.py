@@ -114,14 +114,14 @@ with col2:
     target_month = st.number_input("월", min_value=1, max_value=12, value=11)
 
 if st.button("스케줄 생성하기"):
-    cal = calendar.monthcalendar(target_year, target_month)
+    cal = calendar.Calendar(firstweekday=6).monthcalendar(target_year, target_month)
     business_days = []
     
     for week in cal:
-        for i, day in enumerate(week[:5]):
-            if day != 0:
+        for i, day in enumerate(week):
+            if day != 0 and i in [1, 2, 3, 4, 5]:
                 date_obj = datetime.date(target_year, target_month, day)
-                day_name = ["월", "화", "수", "목", "금"][i]
+                day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
     schedule_results = []
@@ -137,17 +137,29 @@ if st.button("스케줄 생성하기"):
         d_name = bday["day_name"]
         d_date = bday["date"]
         
+        # 전체 총 근무 횟수 기준 오름차순 정렬 (이전 누적 총합 + 당월 총합)
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
-        avail_open.sort(key=lambda x: (staff_counts[x]["open"] + staff_counts.get(x, {}).get("prev_open", 0), staff_counts[x]["open"]))
+        avail_open.sort(key=lambda x: (
+            (staff_counts[x]["open"] + staff_counts[x]["close"]) + 
+            (staff_counts[x].get("prev_open", 0) + staff_counts[x].get("prev_close", 0)),
+            staff_counts[x]["open"] + staff_counts[x]["close"]
+        ))
         selected_open = avail_open[0] if avail_open else ""
         
+        if selected_open:
+            staff_counts[selected_open]["open"] += 1
+            
         avail_close = close_input.get(d_name, [])
         if d_name in ["월", "수"] and "김상혁" in avail_close:
             selected_close = "김상혁"
         else:
             other_avail = [s for s in avail_close if s != "김상혁"]
-            other_avail.sort(key=lambda x: (staff_counts[x]["close"] + staff_counts.get(x, {}).get("prev_close", 0), staff_counts[x]["close"]))
+            other_avail.sort(key=lambda x: (
+                (staff_counts[x]["open"] + staff_counts[x]["close"]) + 
+                (staff_counts[x].get("prev_open", 0) + staff_counts[x].get("prev_close", 0)),
+                staff_counts[x]["open"] + staff_counts[x]["close"]
+            ))
             if other_avail:
                 selected_close = other_avail[0]
             else:
@@ -156,8 +168,6 @@ if st.button("스케줄 생성하기"):
                 else:
                     selected_close = ""
         
-        if selected_open:
-            staff_counts[selected_open]["open"] += 1
         if selected_close:
             staff_counts[selected_close]["close"] += 1
             
@@ -210,14 +220,14 @@ if "schedule_results" in st.session_state:
 
     st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
     
-    month_matrix = calendar.monthcalendar(target_year, target_month)
+    month_matrix = calendar.Calendar(firstweekday=6).monthcalendar(target_year, target_month)
     sched_dict = {item["일"]: {"오픈": item["오픈"], "마감": item["마감"]} for item in st.session_state.schedule_results}
     
     if HAS_MATPLOTLIB:
         fig, ax = plt.subplots(figsize=(10, 8))
         ax.axis('off')
         
-        col_labels = ["월", "화", "수", "목", "금", "토", "일"]
+        col_labels = ["일", "월", "화", "수", "목", "금", "토"]
         cell_text = []
         
         for week in month_matrix:
