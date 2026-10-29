@@ -2,8 +2,13 @@ import streamlit as st
 import pandas as pd
 import datetime
 import calendar
-import matplotlib.pyplot as plt
-import io
+
+try:
+    import matplotlib.pyplot as plt
+    import io
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
 
 st.title("근무 일정 자동 생성 프로그램")
 
@@ -53,7 +58,6 @@ for day in days:
     val = st.text_input(f"마감 - {day}요일", value=default_str)
     close_input[day] = [x.strip() for x in val.split(",") if x.strip()]
 
-
 st.header("2. 이전 달 누적 횟수 입력")
 all_staff = list(set([name for sub in open_input.values() for name in sub] + [name for sub in close_input.values() for name in sub]))
 if "김상혁" not in all_staff:
@@ -65,7 +69,6 @@ for staff in sorted(all_staff):
 
 history_df = pd.DataFrame(history_data)
 edited_history = st.data_editor(history_df, key="history_editor")
-
 
 st.header("3. 일정 생성 및 날짜 설정")
 col1, col2 = st.columns(2)
@@ -174,40 +177,45 @@ if "schedule_results" in st.session_state:
     month_matrix = calendar.monthcalendar(target_year, target_month)
     sched_dict = {item["일"]: {"오픈": item["오픈"], "마감": item["마감"]} for item in st.session_state.schedule_results}
     
-    fig, ax = plt.subplots(figsize=(10, 8))
-    ax.axis('off')
-    
-    col_labels = ["월", "화", "수", "목", "금", "토", "일"]
-    cell_text = []
-    
-    for week in month_matrix:
-        row_str = []
-        for day in week:
-            if day == 0:
-                row_str.append("")
-            else:
-                info = sched_dict.get(day, None)
-                if info:
-                    text_val = f"{day}일\n오픈: {info['오픈']}\n마감: {info['마감']}"
-                else:
-                    text_val = f"{day}일\n(휴무)"
-                row_str.append(text_val)
-        cell_text.append(row_str)
+    if HAS_MATPLOTLIB:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.axis('off')
         
-    table = ax.table(cellText=cell_text, colLabels=col_labels, loc='center', cellLoc='center')
-    table.scale(1, 3)
-    
-    plt.title(f"{target_year}년 {target_month}월 근무 일정표", fontsize=16, pad=20)
-    
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    buf.seek(0)
-    
-    st.pyplot(fig)
-    
-    st.download_button(
-        label="달력 이미지 다운로드",
-        data=buf,
-        file_name=f"{target_year}_{target_month}_schedule.png",
-        mime="image/png"
-    )
+        col_labels = ["월", "화", "수", "목", "금", "토", "일"]
+        cell_text = []
+        
+        for week in month_matrix:
+            row_str = []
+            for day in week:
+                if day == 0:
+                    row_str.append("")
+                else:
+                    info = sched_dict.get(day, None)
+                    if info:
+                        text_val = f"{day}일\n오픈: {info['오픈']}\n마감: {info['마감']}"
+                    else:
+                        text_val = f"{day}일\n(휴무)"
+                    row_str.append(text_val)
+            cell_text.append(row_str)
+            
+        table = ax.table(cellText=cell_text, colLabels=col_labels, loc='center', cellLoc='center')
+        table.scale(1, 3)
+        
+        plt.title(f"{target_year}년 {target_month}월 근무 일정표", fontsize=16, pad=20)
+        
+        buf = io.BytesIO()
+        plt.savefig(buf, format="png", bbox_inches="tight")
+        buf.seek(0)
+        
+        st.pyplot(fig)
+        
+        st.download_button(
+            label="달력 이미지 다운로드",
+            data=buf,
+            file_name=f"{target_year}_{target_month}_schedule.png",
+            mime="image/png"
+        )
+    else:
+        st.warning("matplotlib 라이브러리가 없어 표 형태로 대체합니다.")
+        sched_df = pd.DataFrame(st.session_state.schedule_results)
+        st.dataframe(sched_df)
