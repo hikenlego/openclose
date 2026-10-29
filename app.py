@@ -70,6 +70,128 @@ def solve_quota_matching(slots, avail, quotas):
     return owner, None
 
 
+class SearchLimit(Exception):
+    pass
+
+
+def get_week_idx(d):
+    """달력(일요일 시작) 기준 주차 인덱스"""
+    offset = (d.replace(day=1).weekday() + 1) % 7
+    return (d.day - 1 + offset) // 7
+
+
+def build_conflicts(slots, slot_date, rules):
+    """같은 사람이 동시에 맡을 수 없는 슬롯 쌍 구성 (선택된 규칙만 반영)"""
+    conflicts = {s: set() for s in slots}
+    slot_set = set(slots)
+
+    def add(a, b):
+        if a in slot_set and b in slot_set:
+            conflicts[a].add(b)
+            conflicts[b].add(a)
+
+    for (idx, kind) in slots:
+        if rules.get("same_day") and kind == "오픈":
+            add((idx, "오픈"), (idx, "마감"))
+        nxt = idx + 1
+        if nxt in slot_date and (slot_date[nxt] - slot_date[idx]).days == 1:
+            if rules.get("close_open") and kind == "마감":
+                add((idx, "마감"), (nxt, "오픈"))
+            if rules.get("consec_open") and kind == "오픈":
+                add((idx, "오픈"), (nxt, "오픈"))
+    return conflicts
+
+
+def build_week_caps(slots, slot_week, quotas, slack):
+    """주별 개인 상한 = ceil(쿼터 x 해당 주 슬롯 비율) + 여유분. slack=None이면 상한 없음"""
+    if slack is None:
+        return None
+    total = len(slots)
+    week_slots = {}
+    for s in slots:
+        week_slots[slot_week[s]] = week_slots.get(slot_week[s], 0) + 1
+    return {(p, w): -(-quotas[p] * n // total) + slack for p in quotas for w, n in week_slots.items()}
+
+
+def solve_with_rules(slots, avail, quotas, slot_week, conflicts, caps, node_limit):
+    """DFS + 가장 제약 큰 슬롯 우선 + 전방 검사. 반환 (owner, status) status: ok/infeasible/limit"""
+    rem = dict(quotas)
+    owner = {}
+    wk = {p: {} for p in quotas}
+    unassigned = set(slots)
+    order_index = {s: i for i, s in enumerate(slots)}
+    nodes = [0]
+    av = {s: list(dict.fromkeys(avail[s])) for s in slots}
+
+    def cands(s):
+        w = slot_week[s]
+        res = []
+        for p in av[s]:
+            if p not in rem or rem[p] <= 0:
+                continue
+            if caps is not None and wk[p].get(w, 0) >= caps.get((p, w), 0):
+                continue
+            if any(owner.get(n) == p for n in conflicts[s]):
+                continue
+            res.append(p)
+        return res
+
+    def dfs():
+        if not unassigned:
+            return True
+        nodes[0] += 1
+        if nodes[0] > node_limit:
+            raise SearchLimit()
+        best, best_c = None, None
+        cover = {p: 0 for p in rem}
+        for s in unassigned:
+            c = cands(s)
+            if not c:
+                return False
+            for p in c:
+                cover[p] += 1
+            if best is None or len(c) < len(best_c) or (len(c) == len(best_c) and order_index[s] < order_index[best]):
+                best, best_c = s, c
+        for p in rem:
+            if rem[p] > cover[p]:
+                return False
+        w = slot_week[best]
+        best_c.sort(key=lambda p: (wk[p].get(w, 0), -rem[p], p))
+        for p in best_c:
+            owner[best] = p
+            rem[p] -= 1
+            wk[p][w] = wk[p].get(w, 0) + 1
+            unassigned.discard(best)
+            if dfs():
+                return True
+            unassigned.add(best)
+            wk[p][w] -= 1
+            rem[p] += 1
+            del owner[best]
+        return False
+
+    try:
+        ok = dfs()
+    except SearchLimit:
+        return None, "limit"
+    return (dict(owner), "ok") if ok else (None, "infeasible")
+
+
+def solve_schedule(slots, avail, quotas, slot_week, slot_date, rules, node_limit=40000):
+    """주간 상한을 단계적으로 완화(0 -> +1 -> +2 -> 없음)하며 해 탐색.
+    반환 (owner, slack, caps, status)"""
+    conflicts = build_conflicts(slots, slot_date, rules)
+    levels = [0, 1, 2, None] if rules.get("weekly") else [None]
+    status = "infeasible"
+    for slack in levels:
+        caps = build_week_caps(slots, slot_week, quotas, slack)
+        limit = node_limit * 3 if slack is None else node_limit
+        owner, status = solve_with_rules(slots, avail, quotas, slot_week, conflicts, caps, limit)
+        if owner is not None:
+            return owner, slack, caps, "ok"
+    return None, None, None, status
+
+
 st.title("근무 일정 자동 생성 프로그램")
 
 if "schedule_df" not in st.session_state:
@@ -285,6 +407,17 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
         else:
             st.success("모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
 
+    st.markdown("**배정 시 피할 조건** (체크하면 적용, 해가 없으면 해제해 보세요)")
+    rc1, rc2, rc3, rc4 = st.columns(4)
+    with rc1:
+        rule_close_open = st.checkbox("마감 직후 오픈 피하기", value=True, key="rule_close_open")
+    with rc2:
+        rule_same_day = st.checkbox("같은 날 오픈·마감 중복 피하기", value=True, key="rule_same_day")
+    with rc3:
+        rule_consec_open = st.checkbox("연일 오픈 피하기", value=True, key="rule_consec_open")
+    with rc4:
+        rule_weekly = st.checkbox("주별 쏠림 방지", value=True, key="rule_weekly")
+
     if st.button("2단계: 최종 스케줄 생성하기"):
         business_days = st.session_state.business_days
         staff_prev = st.session_state.staff_prev
@@ -300,12 +433,15 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
 
         # 슬롯 구성 (월/수 마감은 김상혁 고정이라 매칭 대상에서 제외)
         slots, avail, slot_label, fixed_close = [], {}, {}, {}
+        slot_week, slot_date = {}, {}
         for idx, bday in enumerate(business_days):
             d_name, d_date = bday["day_name"], bday["date"]
             day_label = f"{d_date.month}/{d_date.day}({d_name})"
 
+            slot_date[idx] = d_date
             so = (idx, "오픈")
             slots.append(so)
+            slot_week[so] = get_week_idx(d_date)
             avail[so] = [s for s in open_input.get(d_name, []) if s != "김상혁"]
             slot_label[so] = f"{day_label} 오픈"
 
@@ -314,6 +450,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             else:
                 sc = (idx, "마감")
                 slots.append(sc)
+                slot_week[sc] = get_week_idx(d_date)
                 avail[sc] = [s for s in close_input.get(d_name, []) if s != "김상혁"]
                 slot_label[sc] = f"{day_label} 마감"
 
@@ -365,6 +502,46 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                         f"- 위쪽 1단계 버튼을 다시 누르면 성공하는 초기 모범 쿼터로 슬라이더가 초기화됩니다."
                     )
             else:
+                rules = {
+                    "close_open": rule_close_open,
+                    "same_day": rule_same_day,
+                    "consec_open": rule_consec_open,
+                    "weekly": rule_weekly,
+                }
+                rule_names = {
+                    "close_open": "마감 직후 오픈 피하기",
+                    "same_day": "같은 날 오픈·마감 중복 피하기",
+                    "consec_open": "연일 오픈 피하기",
+                    "weekly": "주별 쏠림 방지",
+                }
+                owner, week_slack, week_caps, rstatus = solve_schedule(slots, avail, quotas, slot_week, slot_date, rules)
+
+                if owner is None:
+                    clear_results()
+                    active = [k for k, v in rules.items() if v]
+                    relax_ok = []
+                    for k in active:
+                        trial = dict(rules)
+                        trial[k] = False
+                        o2, _, _, st2 = solve_schedule(slots, avail, quotas, slot_week, slot_date, trial, node_limit=20000)
+                        if o2 is not None:
+                            relax_ok.append(rule_names[k])
+                    if rstatus == "limit":
+                        why = "탐색 한도 안에서 해를 찾지 못했습니다(조건이 너무 빡빡할 가능성이 큽니다)."
+                    else:
+                        why = "선택한 조건을 모두 만족하는 해가 존재하지 않습니다."
+                    if relax_ok:
+                        tip = "다음 중 하나만 해제해도 해가 나옵니다: " + ", ".join(relax_ok)
+                    else:
+                        tip = "한 개만 해제해서는 해가 나오지 않습니다. 2개 이상 해제하거나 슬라이더 쿼터를 조정하세요."
+                    st.error(
+                        f"스케줄 생성 중단! (이전 결과물 초기화됨)\n\n"
+                        f"상세 원인: {why}\n"
+                        f"적용 중인 조건: {', '.join(rule_names[k] for k in active) if active else '없음'}\n\n"
+                        f"해결 가이드: {tip}"
+                    )
+                    st.stop()
+
                 schedule_results = []
                 staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev.get(staff, 0)} for staff in staff_names}
 
@@ -391,7 +568,18 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                 else:
                     st.session_state.schedule_results = schedule_results
                     st.session_state.staff_counts = staff_counts
-                    st.success("지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다!")
+                    st.session_state.applied_rules = rules
+                    st.session_state.week_slack = week_slack
+                    st.session_state.week_caps = week_caps
+                    st.session_state.gen_quotas = dict(quotas)
+                    if rules["weekly"]:
+                        if week_slack is None:
+                            week_note = " (주별 상한은 모두 완화되어 적용되지 못했습니다)"
+                        else:
+                            week_note = f" (주별 상한: 기준 비율 +{week_slack}회 이내)"
+                    else:
+                        week_note = ""
+                    st.success("지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다!" + week_note)
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
@@ -474,3 +662,152 @@ if "schedule_results" in st.session_state:
         st.warning("matplotlib 라이브러리가 없어 표 형태로 대체합니다.")
         sched_df = pd.DataFrame(st.session_state.schedule_results)
         st.dataframe(sched_df)
+
+    st.header("6. 교차 검증 (캘린더 ↔ 가용 인원)")
+
+    # 화면에 출력된 캘린더 셀 텍스트를 그대로 다시 읽어서 검증 (matplotlib 없으면 동일 형식으로 재구성)
+    if HAS_MATPLOTLIB:
+        verify_cells = cell_text
+    else:
+        verify_cells = []
+        for week in month_matrix:
+            row_str = []
+            for day in week:
+                info = sched_dict.get(day)
+                if day == 0:
+                    row_str.append("")
+                elif info:
+                    row_str.append(f"{day}일\n오픈: {info['오픈']}\n마감: {info['마감']}")
+                else:
+                    row_str.append(f"{day}일\n(휴무)")
+            verify_cells.append(row_str)
+
+    import re
+    weekday_names = ["일", "월", "화", "수", "목", "금", "토"]
+    parsed = {}
+    for w_idx, row in enumerate(verify_cells):
+        for c_idx, txt in enumerate(row):
+            mt = re.match(r"(\d+)일\n오픈: (.+)\n마감: (.+)", txt)
+            if mt:
+                parsed[int(mt.group(1))] = {"주": w_idx, "요일": weekday_names[c_idx], "오픈": mt.group(2).strip(), "마감": mt.group(3).strip()}
+
+    expected_days = {b["day_num"]: b["day_name"] for b in st.session_state.business_days}
+    v_rows = []
+
+    for dnum in sorted(expected_days):
+        d_name = expected_days[dnum]
+        info = parsed.get(dnum)
+        if info is None:
+            v_rows.append({"날짜": f"{target_month}/{dnum}({d_name})", "요일일치": "X", "오픈 가용": "X", "마감 가용": "X", "비고": "캘린더에 근무 없음"})
+            continue
+        day_ok = info["요일"] == d_name
+        open_ok = info["오픈"] in open_input.get(d_name, [])
+        if d_name in ["월", "수"]:
+            close_ok = info["마감"] == "김상혁"
+            close_note = "김상혁 고정 확인"
+        else:
+            close_ok = info["마감"] in close_input.get(d_name, [])
+            close_note = ""
+        notes = []
+        if not day_ok:
+            notes.append(f"요일 불일치(캘린더 {info['요일']})")
+        if not open_ok:
+            notes.append(f"오픈 {info['오픈']} 가용 목록에 없음")
+        if not close_ok:
+            notes.append(f"마감 {info['마감']} " + ("김상혁 고정 위반" if d_name in ["월", "수"] else "가용 목록에 없음"))
+        v_rows.append({
+            "날짜": f"{target_month}/{dnum}({d_name})",
+            "요일일치": "O" if day_ok else "X",
+            "오픈 가용": "O" if open_ok else "X",
+            "마감 가용": "O" if close_ok else "X",
+            "비고": ", ".join(notes) if notes else close_note
+        })
+
+    extra_days = [d for d in parsed if d not in expected_days]
+    avail_pass = all(r["요일일치"] == "O" and r["오픈 가용"] == "O" and r["마감 가용"] == "O" for r in v_rows) and not extra_days
+
+    # 캘린더 기준 횟수 vs 통계표 횟수 vs 쿼터
+    cal_counts = {}
+    for dnum, info in parsed.items():
+        cal_counts.setdefault(info["오픈"], {"open": 0, "close": 0})["open"] += 1
+        cal_counts.setdefault(info["마감"], {"open": 0, "close": 0})["close"] += 1
+    count_problems = []
+    for staff, data in st.session_state.staff_counts.items():
+        c = cal_counts.get(staff, {"open": 0, "close": 0})
+        if c["open"] != data["open"] or c["close"] != data["close"]:
+            count_problems.append(f"{staff}: 캘린더 오픈 {c['open']}/마감 {c['close']} vs 통계 오픈 {data['open']}/마감 {data['close']}")
+        gq = st.session_state.get("gen_quotas", {}).get(staff)
+        if gq is not None and (data["open"] + data["close"]) != gq:
+            count_problems.append(f"{staff}: 당월 합계 {data['open'] + data['close']}회 vs 쿼터 {gq}회")
+    count_pass = not count_problems
+
+    # 규칙 검증 (적용 여부와 무관하게 위반 건수 집계)
+    applied = st.session_state.get("applied_rules", {})
+    ordered = sorted(parsed)
+    same_day_v, close_open_v, consec_open_v = [], [], []
+    for dnum in ordered:
+        if parsed[dnum]["오픈"] == parsed[dnum]["마감"]:
+            same_day_v.append(f"{target_month}/{dnum} {parsed[dnum]['오픈']}")
+    date_of = {b["day_num"]: b["date"] for b in st.session_state.business_days}
+    for a, b in zip(ordered, ordered[1:]):
+        if (date_of[b] - date_of[a]).days != 1:
+            continue
+        if parsed[a]["마감"] == parsed[b]["오픈"]:
+            close_open_v.append(f"{target_month}/{a}마감 -> {target_month}/{b}오픈 {parsed[a]['마감']}")
+        if parsed[a]["오픈"] == parsed[b]["오픈"]:
+            consec_open_v.append(f"{target_month}/{a}-{b} 연일 오픈 {parsed[a]['오픈']}")
+
+    # 주별 분포
+    week_labels = sorted({i["주"] for i in parsed.values()})
+    week_table = {}
+    for dnum, info in parsed.items():
+        for person in (info["오픈"], info["마감"]):
+            week_table.setdefault(person, {w: 0 for w in week_labels})[info["주"]] += 1
+    week_rows = []
+    for person in sorted(week_table):
+        row = {"이름": person}
+        for w in week_labels:
+            row[f"{w + 1}주차"] = week_table[person][w]
+        row["최대"] = max(week_table[person].values())
+        week_rows.append(row)
+
+    caps = st.session_state.get("week_caps")
+    cap_problems = []
+    if applied.get("weekly") and caps:
+        for person, wk in week_table.items():
+            for w, n in wk.items():
+                limit = caps.get((person, w))
+                if limit is not None and n > limit:
+                    cap_problems.append(f"{person} {w + 1}주차 {n}회 > 상한 {limit}회")
+
+    # 결과 요약
+    summary = []
+    summary.append(("가용 인원 일치 (요일·오픈·마감)", avail_pass, "전 일자 일치" if avail_pass else "불일치 있음, 아래 표 확인"))
+    summary.append(("캘린더 ↔ 통계표 ↔ 쿼터 횟수 일치", count_pass, "일치" if count_pass else " / ".join(count_problems)))
+    for key, label, viol in [("close_open", "마감 직후 오픈", close_open_v), ("same_day", "같은 날 오픈·마감 중복", same_day_v), ("consec_open", "연일 오픈", consec_open_v)]:
+        if applied.get(key):
+            summary.append((f"{label} 없음 (적용 중)", not viol, "위반 없음" if not viol else "; ".join(viol)))
+        else:
+            summary.append((f"{label} (해제됨, 참고)", True, "발생 0건" if not viol else f"{len(viol)}건 발생: " + "; ".join(viol)))
+    if applied.get("weekly"):
+        summary.append(("주별 상한 이내 (적용 중)", not cap_problems, "상한 이내" if not cap_problems else "; ".join(cap_problems)))
+    else:
+        summary.append(("주별 쏠림 방지 (해제됨, 참고)", True, "아래 주별 분포표 참고"))
+
+    all_pass = all(ok for _, ok, _ in summary)
+    if all_pass:
+        st.success("교차 검증 결과: 모든 항목 일치")
+    else:
+        st.error("교차 검증 결과: 불일치 항목이 있습니다")
+
+    summary_df = pd.DataFrame([{"검증 항목": n, "결과": "일치" if ok else "불일치", "상세": d} for n, ok, d in summary])
+    st.dataframe(summary_df, hide_index=True)
+
+    st.subheader("일자별 가용 인원 대조")
+    st.dataframe(pd.DataFrame(v_rows), hide_index=True)
+
+    st.subheader("개인별 주차 분포")
+    st.dataframe(pd.DataFrame(week_rows), hide_index=True)
+
+    verify_text = "\n".join(f"{n}: {'일치' if ok else '불일치'} ({d})" for n, ok, d in summary)
+    st.text_area("검증 결과 복사용 텍스트", value=verify_text, height=150)
