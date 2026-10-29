@@ -246,15 +246,24 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
             
             status_str = "\n".join(status_details) if status_details else "- 가용 인원 없음"
             
-            remaining_days_count = len(business_days) - len(schedule_results)
-            
             suggestion_staff_list = [s for s in avail_close_staff if not (s == "김상혁" and fail_day_name in ["월", "수"])]
+            reducible_staff_list = [s for s in general_staff if target_nov_quotas.get(s, 0) > 1]
+            
             suggestion_str = ""
-            if suggestion_staff_list:
-                example_name = suggestion_staff_list[0]
-                suggestion_str = f"제언: 현재 {fail_day_name}요일 마감에 투입 가능한 인원({', '.join(suggestion_staff_list)}) 모두가 쿼터를 채워 막혔습니다. 슬라이더에서 {example_name} 씨의 최종 누적 횟수 목표를 현재보다 최소 {remaining_days_count}회 이상 늘려 잡으시거나, 1단계에서 해당 요일 마감 가용 인원에 다른 사람을 추가해 주세요."
+            if suggestion_staff_list and reducible_staff_list:
+                inc_example = suggestion_staff_list[0]
+                dec_candidates = [s for s in reducible_staff_list if s not in suggestion_staff_list]
+                if not dec_candidates:
+                    dec_candidates = reducible_staff_list
+                dec_example = dec_candidates[0]
+                
+                suggestion_str = (
+                    f"제언: 현재 {fail_day_name}요일 마감에 투입 가능한 인원({', '.join(suggestion_staff_list)}) 모두가 쿼터를 채워 막혔습니다.\n"
+                    f"- 늘려야 할 사람: 슬라이더에서 {inc_example} 씨의 최종 누적 횟수 목표를 늘려주세요.\n"
+                    f"- 줄여야 할 사람: 전체 총합 유지를 위해 {dec_example} 씨의 최종 누적 횟수 목표를 그만큼 줄여주세요."
+                )
             else:
-                suggestion_str = f"제언: 슬라이더에서 전체 인원의 누적 횟수 목표를 재조정하여 남은 슬롯 수({remaining_days_count}개)를 소화할 수 있도록 배분해 주세요."
+                suggestion_str = "제언: 슬라이더에서 전체 인원의 누적 횟수 목표를 재조정하여 요일별 가용 인원과 쿼터 균형을 맞춰주세요."
 
             st.error(
                 f"스케줄 생성 중단 및 오류 발생!\n\n"
