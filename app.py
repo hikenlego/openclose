@@ -234,7 +234,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
                 "마감": selected_close
             })
             
-       if generation_failed:
+      if generation_failed:
             avail_close_staff = close_input.get(fail_day_name, [])
             status_details = []
             for s in avail_close_staff:
