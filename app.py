@@ -134,7 +134,7 @@ if st.button("1단계: 날짜 설정 및 완벽한 초기 스케줄 시뮬레이
             
     st.session_state.staff_prev = staff_prev
 
-    # 기존 슬라이더 키 초기화 및 완벽히 성공하는 모범 스케줄 먼저 시뮬레이션 생성
+    # 슬라이더 키 초기화
     general_staff = [s for s in staff_names if s != "김상혁"]
     for staff in general_staff:
         if f"cumul_slider_{staff}" in st.session_state:
@@ -142,23 +142,19 @@ if st.button("1단계: 날짜 설정 및 완벽한 초기 스케줄 시뮬레이
         if f"nov_slider_{staff}" in st.session_state:
             del st.session_state[f"nov_slider_{staff}"]
 
-    # 100% 성공하는 스케줄을 먼저 백그라운드에서 빌드하여 그 당월 횟수를 최적 초기값으로 채택
+    # 1단계 실행 시 이전 생성 결과가 남아있다면 초기화
+    if "schedule_results" in st.session_state:
+        del st.session_state["schedule_results"]
+    if "staff_counts" in st.session_state:
+        del st.session_state["staff_counts"]
+
+    # 100% 성공하는 스케줄 시뮬레이션 빌드
     sanghyuk_closes = sum(1 for bday in business_days if bday["day_name"] in ["월", "수"])
-    total_open_slots = len(business_days)
-    total_close_slots = len(business_days) - sanghyuk_closes
-    
-    # 가용 인원 제약을 만족하면서 돌아가는 완벽한 초기 쿼터 분배 시뮬레이션
-    temp_counts = {s: 0 for s in general_staff}
-    optimal_nov_quotas = {s: 0 for s in general_staff}
-    
-    # 시뮬레이션 빌드 수행
-    sim_success = True
     sim_staff_counts = {s: {"open": 0, "close": 0} for s in staff_names}
     
     for bday in business_days:
         d_name = bday["day_name"]
         
-        # 오픈 배정 시뮬레이션
         avail_open = [s for s in open_input.get(d_name, []) if s != "김상혁"]
         if not avail_open:
             avail_open = general_staff
@@ -166,9 +162,7 @@ if st.button("1단계: 날짜 설정 및 완벽한 초기 스케줄 시뮬레이
         sel_o = avail_open[0]
         sim_staff_counts[sel_o]["open"] += 1
         
-        # 마감 배정 시뮬레이션
         if d_name in ["월", "수"]:
-            sel_c = "김상혁"
             sim_staff_counts["김상혁"]["close"] += 1
         else:
             avail_close = [s for s in close_input.get(d_name, []) if s != "김상혁"]
@@ -178,6 +172,7 @@ if st.button("1단계: 날짜 설정 및 완벽한 초기 스케줄 시뮬레이
             sel_c = avail_close[0]
             sim_staff_counts[sel_c]["close"] += 1
 
+    optimal_nov_quotas = {}
     for s in general_staff:
         optimal_nov_quotas[s] = sim_staff_counts[s]["open"] + sim_staff_counts[s]["close"]
 
@@ -310,6 +305,12 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             })
             
         if generation_failed:
+            # 핵심 수정: 생성 실패 시 기존에 남아있던 성공 결과/통계 항목들을 깔끔하게 삭제
+            if "schedule_results" in st.session_state:
+                del st.session_state["schedule_results"]
+            if "staff_counts" in st.session_state:
+                del st.session_state["staff_counts"]
+
             avail_close_staff = close_input.get(fail_day_name, [])
             status_details = []
             for s in avail_close_staff:
@@ -336,10 +337,11 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                 suggestion_str = "제언: 슬라이더에서 전체 인원의 누적 횟수 목표를 재조정하여 요일별 가용 인원과 쿼터 균형을 맞춰주세요."
 
             st.error(
-                f"스케줄 생성 중단 및 오류 발생!\n\n"
-                f"상세 원인:\n{fail_reason}\n\n"
-                f"[참고] {fail_day_name}요일 마감 가용 인원들의 현재 쿼터 현황:\n{status_str}\n\n"
-                f"해결 가이드:\n{suggestion_str}"
+                f"❌ 스케줄 생성 중단 및 오류 발생!\n"
+                f"(이전에 생성되었던 결과물 및 통계는 모두 초기화되었습니다.)\n\n"
+                f"**상세 원인:**\n{fail_reason}\n\n"
+                f"🔍 **[참고] {fail_day_name}요일 마감 가용 인원들의 현재 쿼터 현황:**\n{status_str}\n\n"
+                f"💡 **해결 가이드:**\n{suggestion_str}"
             )
         else:
             mismatch = False
@@ -350,11 +352,15 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                     break
             
             if mismatch:
-                st.error("오류: 지정한 목표 쿼터와 실제 생성된 횟수 간에 불일치가 감지되었습니다.")
+                if "schedule_results" in st.session_state:
+                    del st.session_state["schedule_results"]
+                if "staff_counts" in st.session_state:
+                    del st.session_state["staff_counts"]
+                st.error("❌ 오류: 지정한 목표 쿼터와 실제 생성된 횟수 간에 불일치가 감지되었습니다. (이전 결과물 초기화됨)")
             else:
                 st.session_state.schedule_results = schedule_results
                 st.session_state.staff_counts = staff_counts
-                st.success("지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다.")
+                st.success("✨ 지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다!")
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
