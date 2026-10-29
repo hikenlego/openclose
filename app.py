@@ -957,7 +957,7 @@ if "schedule_results" in st.session_state:
 
         # --- 구글 시트 스타일 달력 이미지 (위에서 만든 cell_text를 그대로 읽어서 그림) ---
         def _short(name):
-            return name[1:] if len(name) == 3 else name
+            return name
 
         RED, BLUE, GRID = "#d93025", "#3f51d9", "#d4d4d4"
         n_rows = len(month_matrix)
@@ -995,14 +995,11 @@ if "schedule_results" in st.session_state:
                 x0 = c * cw
                 hol_name = holiday_map.get(datetime.date(target_year, target_month, day))
                 num_color = RED if (c == 0 or hol_name) else BLUE if c == 6 else "black"
-                if c in (0, 6):
-                    ax.text(x0 + cw - 0.1, y_top - 0.1, str(day), ha="right", va="top", fontsize=12, color=num_color)
-                else:
-                    ax.text(x0 + 0.1, y_top - 0.1, str(day), ha="left", va="top", fontsize=12, color=num_color)
+                ax.text(x0 + 0.1, y_top - 0.1, str(day), ha="left", va="top", fontsize=12, color=num_color)
                 mt = _re.match(r"(\d+)일\n오픈: (.+)\n마감: (.+)", cell_text[r][c])
                 if mt:
                     ax.text(x0 + 0.1, y_top - row_h * 0.46, f"{_short(mt.group(2).strip())} / {_short(mt.group(3).strip())}",
-                            ha="left", va="center", fontsize=12.5, color="black")
+                            ha="left", va="center", fontsize=11.5, color="black")
                 if hol_name:
                     ax.text(x0 + 0.1, y_top - row_h * (0.66 if mt else 0.46), f"({hol_name})",
                             ha="left", va="center", fontsize=12, color=RED)
