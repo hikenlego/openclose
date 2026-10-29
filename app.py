@@ -246,7 +246,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
         for i, staff in enumerate(general_staff):
             prev = st.session_state.staff_prev.get(staff, 0)
             default_final = prev + optimal_dict.get(staff, 5)
-           val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=prev, max_value=30, value=default_final, key=f"cumul_slider_{staff}")
+            val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=prev, max_value=30, value=default_final, key=f"cumul_slider_{staff}")
             temp_vals[staff] = val
             current_nov_sum += (val - prev)
 
