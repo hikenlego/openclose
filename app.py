@@ -182,6 +182,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
         
         generation_failed = False
         fail_reason = ""
+        fail_day_name = ""
         
         for bday in business_days:
             d_name = bday["day_name"]
@@ -191,15 +192,14 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
             avail_open = open_input.get(d_name, [])
             avail_open = [s for s in avail_open if s != "김상혁"]
             
-            # 엄격한 필터: 아직 쿼터를 다 채우지 않은 사람만 후보로 인정
             valid_open = [s for s in avail_open if (staff_counts[s]["open"] + staff_counts[s]["close"]) < target_nov_quotas.get(s, 0)]
             
             if not valid_open:
                 generation_failed = True
+                fail_day_name = d_name
                 fail_reason = f"날짜 {d_date}({d_name}요일) 오픈 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠거나, 요일별 오픈 가용 인원에 남은 쿼터가 있는 사람이 포함되어 있지 않습니다."
                 break
                 
-            # 쿼터를 아직 덜 채운 사람 중 당월 근무 횟수가 적은 사람 우선
             valid_open.sort(key=lambda x: (staff_counts[x]["open"] + staff_counts[x]["close"]))
             selected_open = valid_open[0]
             
@@ -216,6 +216,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
                 
                 if not valid_close:
                     generation_failed = True
+                    fail_day_name = d_name
                     fail_reason = f"날짜 {d_date}({d_name}요일) 마감 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠거나, 요일별 마감 가용 인원에 남은 쿼터가 있는 사람이 포함되어 있지 않습니다."
                     break
                     
@@ -233,12 +234,11 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
                 "마감": selected_close
             })
             
-       if generation_failed:
-            # 실패한 날의 마감/오픈 가용 인원들의 현재 쿼터 달성 현황 집계
-            avail_close_staff = close_input.get(d_name, [])
+        if generation_failed:
+            avail_close_staff = close_input.get(fail_day_name, [])
             status_details = []
             for s in avail_close_staff:
-                if s == "김상혁" and d_name in ["월", "수"]:
+                if s == "김상혁" and fail_day_name in ["월", "수"]:
                     continue
                 current_done = staff_counts[s]["open"] + staff_counts[s]["close"]
                 target_q = target_nov_quotas.get(s, 0)
@@ -249,11 +249,10 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
             st.error(
                 f"❌ 스케줄 생성 중단 및 오류 발생!\n\n"
                 f"**상세 원인:**\n{fail_reason}\n\n"
-                f"🔍 **[참고] {d_name}요일 마감 가용 인원들의 현재 쿼터 현황:**\n{status_str}\n\n"
+                f"🔍 **[참고] {fail_day_name}요일 마감 가용 인원들의 현재 쿼터 현황:**\n{status_str}\n\n"
                 f"💡 **해결 방법:** 요일별 가용 인원 설정(1단계)을 넓히거나, 슬라이더에서 특정 인원의 최종 누적 횟수 목표를 재조정해 주세요."
             )
         else:
-            # 최종 검증: 생성된 횟수가 사용자가 지정한 쿼터와 1이라도 오차가 있는지 확인
             mismatch = False
             for staff, target in target_nov_quotas.items():
                 actual = staff_counts[staff]["open"] + staff_counts[staff]["close"]
