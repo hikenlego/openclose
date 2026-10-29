@@ -102,16 +102,14 @@ history_df.index.name = "이름"
 st.info("행은 직원 이름, 열은 월별(9~12월) 총계입니다. 11~12월은 비워둔 상태로 유지됩니다.")
 edited_history = st.data_editor(history_df, key="history_editor")
 
-st.header("3. 단계별 스케줄 설정 및 생성")
-
+st.header("3. 일정 생성 및 날짜 설정")
 col1, col2 = st.columns(2)
 with col1:
     target_year = st.number_input("연도", min_value=2024, max_value=2030, value=2026)
 with col2:
     target_month = st.number_input("월", min_value=1, max_value=12, value=11)
 
-# 1단계 버튼: 날짜 및 기준 계산
-if st.button("1단계: 날짜 설정 및 기준 계산하기"):
+if st.button("스케줄 생성하기"):
     calendar.setfirstweekday(calendar.SUNDAY)
     cal = calendar.monthcalendar(target_year, target_month)
     business_days = []
@@ -123,8 +121,6 @@ if st.button("1단계: 날짜 설정 및 기준 계산하기"):
                 day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
-    st.session_state.business_days = business_days
-    
     staff_prev = {}
     for staff in staff_names:
         if staff in edited_history.index:
@@ -132,107 +128,93 @@ if st.button("1단계: 날짜 설정 및 기준 계산하기"):
             staff_prev[staff] = int(val) if pd.notna(val) else 0
         else:
             staff_prev[staff] = 0
-            
-    st.session_state.staff_prev = staff_prev
-    st.success("기준 날짜와 이전 누적 데이터가 계산되었습니다. 아래 슬라이더에서 인원별 당월 목표 횟수를 조정하세요!")
 
-# 만약 1단계가 완료되어 세션에 데이터가 존재하면 슬라이더 UI 제공
-if "business_days" in st.session_state and "staff_prev" in st.session_state:
-    st.subheader("인원별 당월(11월) 목표 근무 횟수 조정 (슬라이더)")
-    st.info("알고리즘이 계산한 기본 권장 횟수입니다. 마음에 들지 않으면 스크롤바로 직접 수정하세요.")
+    target_final_cumulative = {
+        "이현준": 15,
+        "박라영": 15,
+        "정은성": 16,
+        "김동환": 16,
+        "김범수": 16,
+        "허다인": 16
+    }
     
-    user_quotas = {}
-    general_staff = [s for s in staff_names if s != "김상혁"]
-    
-    # 기본 권장치 자동 배분 로직 (이현준, 박라영 4~5회 / 나머지 6회 등)
-    general_staff_sorted = sorted(general_staff, key=lambda x: st.session_state.staff_prev.get(x, 0), reverse=True)
-    
-    for i, staff in enumerate(general_staff_sorted):
-        prev = st.session_state.staff_prev.get(staff, 0)
-        # 기본 추천 당월 횟수
-        default_val = 5 if i < 2 else 6
-        user_quotas[staff] = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=1, max_value=10, value=default_val, key=f"slider_{staff}")
+    target_nov_quotas = {}
+    for staff, final_target in target_final_cumulative.items():
+        prev = staff_prev.get(staff, 0)
+        target_nov_quotas[staff] = max(0, final_target - prev)
         
-    # 김상혁 씨는 월수 마감 고정
-    sanghyuk_closes = sum(1 for bday in st.session_state.business_days if bday["day_name"] in ["월", "수"])
-    user_quotas["김상혁"] = sanghyuk_closes
+    sanghyuk_closes = sum(1 for bday in business_days if bday["day_name"] in ["월", "수"])
+    target_nov_quotas["김상혁"] = sanghyuk_closes
 
-    # 2단계 버튼: 최종 스케줄 생성
-    if st.button("2단계: 최종 스케줄 생성하기"):
-        business_days = st.session_state.business_days
-        staff_prev = st.session_state.staff_prev
+    staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev.get(staff, 0)} for staff in staff_names}
+    schedule_results = []
+    
+    for bday in business_days:
+        d_name = bday["day_name"]
+        d_date = bday["date"]
         
-        staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev.get(staff, 0)} for staff in staff_names}
-        schedule_results = []
+        avail_open = open_input.get(d_name, [])
+        avail_open = [s for s in avail_open if s != "김상혁"]
         
-        for bday in business_days:
-            d_name = bday["day_name"]
-            d_date = bday["date"]
+        eligible_open = [s for s in avail_open if staff_counts[s]["open"] + staff_counts[s]["close"] < target_nov_quotas.get(s, 0)]
+        if not eligible_open:
+            eligible_open = avail_open 
             
-            avail_open = open_input.get(d_name, [])
-            avail_open = [s for s in avail_open if s != "김상혁"]
+        eligible_open.sort(key=lambda x: (
+            (staff_counts[x]["open"] + staff_counts[x]["close"]) / target_nov_quotas.get(x, 1),
+            staff_counts[x]["open"] + staff_counts[x]["close"]
+        ))
+        
+        selected_open = eligible_open[0] if eligible_open else ""
+        if selected_open:
+            staff_counts[selected_open]["open"] += 1
             
-            eligible_open = [s for s in avail_open if staff_counts[s]["open"] + staff_counts[s]["close"] < user_quotas.get(s, 0)]
-            if not eligible_open:
-                eligible_open = avail_open 
+        avail_close = close_input.get(d_name, [])
+        if d_name in ["월", "수"] and "김상혁" in avail_close:
+            selected_close = "김상혁"
+        else:
+            other_avail = [s for s in avail_close if s != "김상혁"]
+            eligible_close = [s for s in other_avail if staff_counts[s]["open"] + staff_counts[s]["close"] < target_nov_quotas.get(s, 0)]
+            if not eligible_close:
+                eligible_close = other_avail
                 
-            eligible_open.sort(key=lambda x: (
-                (staff_counts[x]["open"] + staff_counts[x]["close"]) / user_quotas.get(x, 1),
+            eligible_close.sort(key=lambda x: (
+                (staff_counts[x]["open"] + staff_counts[x]["close"]) / target_nov_quotas.get(x, 1),
                 staff_counts[x]["open"] + staff_counts[x]["close"]
             ))
             
-            selected_open = eligible_open[0] if eligible_open else ""
-            if selected_open:
-                staff_counts[selected_open]["open"] += 1
-                
-            avail_close = close_input.get(d_name, [])
-            if d_name in ["월", "수"] and "김상혁" in avail_close:
-                selected_close = "김상혁"
+            if eligible_close:
+                selected_close = eligible_close[0]
             else:
-                other_avail = [s for s in avail_close if s != "김상혁"]
-                eligible_close = [s for s in other_avail if staff_counts[s]["open"] + staff_counts[s]["close"] < user_quotas.get(s, 0)]
-                if not eligible_close:
-                    eligible_close = other_avail
-                    
-                eligible_close.sort(key=lambda x: (
-                    (staff_counts[x]["open"] + staff_counts[x]["close"]) / user_quotas.get(x, 1),
-                    staff_counts[x]["open"] + staff_counts[x]["close"]
-                ))
-                
-                if eligible_close:
-                    selected_close = eligible_close[0]
+                if d_name in ["월", "수"]:
+                    selected_close = "김상혁"
                 else:
-                    if d_name in ["월", "수"]:
-                        selected_close = "김상혁"
-                    else:
-                        selected_close = ""
+                    selected_close = ""
+        
+        if selected_close:
+            staff_counts[selected_close]["close"] += 1
             
-            if selected_close:
-                staff_counts[selected_close]["close"] += 1
-                
-            schedule_results.append({
-                "날짜": d_date,
-                "일": bday["day_num"],
-                "요일": d_name,
-                "오픈": selected_open,
-                "마감": selected_close
-            })
-            
-        st.session_state.schedule_results = schedule_results
-        st.session_state.staff_counts = staff_counts
-        st.success("조정된 목표 쿼터에 맞춰 최종 스케줄이 생성되었습니다!")
+        schedule_results.append({
+            "날짜": d_date,
+            "일": bday["day_num"],
+            "요일": d_name,
+            "오픈": selected_open,
+            "마감": selected_close
+        })
+        
+    st.session_state.schedule_results = schedule_results
+    st.session_state.staff_counts = staff_counts
+    st.success("최종 누적 쿼터제 기반 스케줄이 성공적으로 생성되었습니다!")
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
+    st.info("💡 아래 '누적횟수' 또는 '당월 합계' 등의 값을 직접 수정(더블클릭)하면, 복사 양식과 캘린더 내용이 실시간으로 연동되어 반영됩니다!")
     
     stats_rows = []
-    copy_texts = []
-    
     for staff, data in st.session_state.staff_counts.items():
         m_open = data["open"]
         m_close = data["close"]
         m_total = m_open + m_close
-        
         prev_total = data.get("prev_total", 0)
         total_sum = prev_total + m_total 
         
@@ -244,15 +226,25 @@ if "schedule_results" in st.session_state:
             "누적횟수": total_sum
         })
         
-        line_str = f"{staff} / 당월 오픈 {m_open} / 당월 마감 {m_close} / 당월 합계 {m_total} / 누적횟수 {total_sum}"
+    stats_df = pd.DataFrame(stats_rows)
+    stats_df.set_index("이름", inplace=True)
+    
+    # 수정 가능한 데이터 에디터로 변경하여 실시간 입력 반영
+    edited_stats = st.data_editor(stats_df, key="stats_editor")
+    
+    # 수정된 통계 값을 바탕으로 복사 텍스트 양식 실시간 생성
+    copy_texts = []
+    for staff, row in edited_stats.iterrows():
+        o = row["당월 오픈"]
+        c = row["당월 마감"]
+        t = row["당월 합계"]
+        tot = row["누적횟수"]
+        line_str = f"{staff} / 당월 오픈 {o} / 당월 마감 {c} / 당월 합계 {t} / 누적횟수 {tot}"
         copy_texts.append(line_str)
         
-    stats_df = pd.DataFrame(stats_rows)
-    st.dataframe(stats_df)
-    
-    st.subheader("복사 텍스트 양식")
+    st.subheader("복사 텍스트 양식 (실시간 연동)")
     full_copy_text = "\n".join(copy_texts)
-    st.text_area("아래 내용을 복사하여 사용하세요", value=full_copy_text, height=150)
+    st.text_area("아래 내용을 복사하여 사용하세요", value=full_copy_text, height=150, key="copy_area")
 
     st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
     
