@@ -122,3 +122,92 @@ if st.button("스케줄 생성하기"):
         if selected_close:
             staff_counts[selected_close]["close"] += 1
             
+        schedule_results.append({
+            "날짜": d_date,
+            "일": bday["day_num"],
+            "요일": d_name,
+            "오픈": selected_open,
+            "마감": selected_close
+        })
+        
+    st.session_state.schedule_results = schedule_results
+    st.session_state.staff_counts = staff_counts
+    st.success("스케줄이 성공적으로 생성되었습니다!")
+
+if "schedule_results" in st.session_state:
+    st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
+    stats_rows = []
+    copy_texts = []
+    
+    for staff, data in st.session_state.staff_counts.items():
+        m_open = data["open"]
+        m_close = data["close"]
+        m_total = m_open + m_close
+        p_open = data.get("prev_open", 0)
+        p_close = data.get("prev_close", 0)
+        total_open = m_open + p_open
+        total_close = m_close + p_close
+        total_sum = total_open + total_close
+        
+        stats_rows.append({
+            "이름": staff,
+            "당월 오픈": m_open,
+            "당월 마감": m_close,
+            "당월 합계": m_total,
+            "총 오픈": total_open,
+            "총 마감": total_close,
+            "총계": total_sum
+        })
+        
+        line_str = f"{staff} / 오픈 {m_open} / 마감 {m_close} / 당월 {m_total} / 총 오픈 {total_open} / 총 마감 {total_close} / 총계 {total_sum}"
+        copy_texts.append(line_str)
+        
+    stats_df = pd.DataFrame(stats_rows)
+    st.dataframe(stats_df)
+    
+    st.subheader("복사 텍스트 양식")
+    full_copy_text = "\n".join(copy_texts)
+    st.text_area("아래 내용을 복사하여 사용하세요", value=full_copy_text, height=150)
+
+    st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
+    
+    month_matrix = calendar.monthcalendar(target_year, target_month)
+    sched_dict = {item["일"]: {"오픈": item["오픈"], "마감": item["마감"]} for item in st.session_state.schedule_results}
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    ax.axis('off')
+    
+    col_labels = ["월", "화", "수", "목", "금", "토", "일"]
+    cell_text = []
+    
+    for week in month_matrix:
+        row_str = []
+        for day in week:
+            if day == 0:
+                row_str.append("")
+            else:
+                info = sched_dict.get(day, None)
+                if info:
+                    text_val = f"{day}일\n오픈: {info['오픈']}\n마감: {info['마감']}"
+                else:
+                    text_val = f"{day}일\n(휴무)"
+                row_str.append(text_val)
+        cell_text.append(row_str)
+        
+    table = ax.table(cellText=cell_text, colLabels=col_labels, loc='center', cellLoc='center')
+    table.scale(1, 3)
+    
+    plt.title(f"{target_year}년 {target_month}월 근무 일정표", fontsize=16, pad=20)
+    
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", bbox_inches="tight")
+    buf.seek(0)
+    
+    st.pyplot(fig)
+    
+    st.download_button(
+        label="달력 이미지 다운로드",
+        data=buf,
+        file_name=f"{target_year}_{target_month}_schedule.png",
+        mime="image/png"
+    )
