@@ -233,8 +233,25 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
                 "마감": selected_close
             })
             
-        if generation_failed:
-            st.error(f"❌ 스케줄 생성 중단 및 오류 발생!\n\n**상세 원인:**\n{fail_reason}\n\n💡 **해결 방법:** 요일별 가용 인원 설정(1단계)을 넓히거나, 슬라이더에서 특정 인원의 최종 누적 횟수 목표를 재조정해 주세요.")
+       if generation_failed:
+            # 실패한 날의 마감/오픈 가용 인원들의 현재 쿼터 달성 현황 집계
+            avail_close_staff = close_input.get(d_name, [])
+            status_details = []
+            for s in avail_close_staff:
+                if s == "김상혁" and d_name in ["월", "수"]:
+                    continue
+                current_done = staff_counts[s]["open"] + staff_counts[s]["close"]
+                target_q = target_nov_quotas.get(s, 0)
+                status_details.append(f"- **{s}**: 현재 {current_done}회 / 목표 쿼터 {target_q}회")
+            
+            status_str = "\n".join(status_details) if status_details else "- 가용 인원 없음"
+            
+            st.error(
+                f"❌ 스케줄 생성 중단 및 오류 발생!\n\n"
+                f"**상세 원인:**\n{fail_reason}\n\n"
+                f"🔍 **[참고] {d_name}요일 마감 가용 인원들의 현재 쿼터 현황:**\n{status_str}\n\n"
+                f"💡 **해결 방법:** 요일별 가용 인원 설정(1단계)을 넓히거나, 슬라이더에서 특정 인원의 최종 누적 횟수 목표를 재조정해 주세요."
+            )
         else:
             # 최종 검증: 생성된 횟수가 사용자가 지정한 쿼터와 1이라도 오차가 있는지 확인
             mismatch = False
