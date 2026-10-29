@@ -80,37 +80,30 @@ for day in days:
 
 st.header("2. 이전 달 누적 횟수 입력 (월별 총계)")
 
-# 1. 직원 이름 목록 정의
 staff_names = sorted(list(set([name for sub in open_input.values() for name in sub] + [name for sub in close_input.values() for name in sub])))
 if "김상혁" not in staff_names:
     staff_names.append("김상혁")
 staff_names = sorted(staff_names)
 
-# 2. 엑셀 예시 기준 초기 데이터 설정 (행: 월, 열: 이름, 값: 오픈+마감 총 합계)
-initial_history_dict = {
-    "9월": {"김상혁": 8, "박라영": 5, "김동환": 5, "정은성": 5, "김범수": 4, "허다인": 4, "이현준": 4},
-    "10월": {"김상혁": 16, "박라영": 10, "김동환": 10, "정은성": 10, "김범수": 10, "허다인": 10, "이현준": 11},
-    "11월": {"김상혁": 16, "박라영": 10, "김동환": 10, "정은성": 10, "김범수": 10, "허다인": 10, "이현준": 11},  # 10월 최신 데이터 승계
-    "12월": {"김상혁": 16, "박라영": 10, "김동환": 10, "정은성": 10, "김범수": 10, "허다인": 10, "이현준": 11}   # 10월 최신 데이터 승계
-}
+september_vals = {"김상혁": 8, "박라영": 5, "김동환": 5, "정은성": 5, "김범수": 4, "허다인": 4, "이현준": 4}
+october_vals = {"김상혁": 16, "박라영": 10, "김동환": 10, "정은성": 10, "김범수": 10, "허다인": 10, "이현준": 11}
 
-# 데이터프레임 구성 (행: 월, 열: 이름)
-history_table_data = []
-for month in ["9월", "10월", "11월", "12월"]:
-    row_dict = {"월": month}
+history_rows = []
+for m in ["9월", "10월", "11월", "12월"]:
+    row = {"월": m}
     for staff in staff_names:
-        row_dict[staff] = initial_history_dict.get(month, {}).get(staff, 0)
-    history_table_data.append(row_dict)
+        if m == "9월":
+            row[staff] = september_vals.get(staff, 0)
+        elif m == "10월":
+            row[staff] = october_vals.get(staff, 0)
+        else:
+            row[staff] = None  # 11월, 12월은 빈칸으로 설정
+    history_rows.append(row)
 
-history_df = pd.DataFrame(history_table_data)
-# '월' 컬럼을 인덱스로 설정하여 엑셀과 같은 시각적 형태 구현
+history_df = pd.DataFrame(history_rows)
 history_df.set_index("월", inplace=True)
 
-st.info("9월부터 12월까지의 인원별 월 총 근무 횟수를 확인 및 수정하세요. (데이터가 없는 11, 12월은 최근 10월 기준 값이 자동 반영됩니다)")
 edited_history = st.data_editor(history_df, key="history_editor")
-
-# 스케줄 생성 시 참고할 누적 총합 데이터 추출 (가장 최신 월 또는 선택된 월 기준, 여기서는 10월 혹은 가장 최근 입력값 활용)
-# 만약 사용자가 수정을 했다면 수정된 11월/12월 데이터 중 가장 최신 데이터를 추적하거나, 타겟 월 직전 달의 누적치를 반영
 
 st.header("3. 일정 생성 및 날짜 설정")
 col1, col2 = st.columns(2)
@@ -120,44 +113,51 @@ with col2:
     target_month = st.number_input("월", min_value=1, max_value=12, value=11)
 
 if st.button("스케줄 생성하기"):
-    # 일요일 시작 기준으로 설정
+    # 일요일 시작 기준으로 영업일(월~금) 추출
     calendar.setfirstweekday(calendar.SUNDAY)
     cal = calendar.monthcalendar(target_year, target_month)
     business_days = []
     
     for week in cal:
         for i, day in enumerate(week):
-            # 일요일 시작 기준: 0(일), 1(월), 2(화), 3(수), 4(목), 5(금), 6(토)
-            # 월~금에 해당하는 인덱스 1, 2, 3, 4, 5만 영업일로 추출
             if day != 0 and i in [1, 2, 3, 4, 5]:
                 date_obj = datetime.date(target_year, target_month, day)
                 day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
-    schedule_results = []
-# 스케줄 생성 시 각 직원의 기준 누적 횟수 계산 (가장 최신에 입력된 누적 합계 수치 적용)
+    # [핵심] 가장 최근에 입력된 확정 월(예: 10월)의 누적 총합을 기준(prev_total)으로 가져옴
+    valid_rows = edited_history.dropna(how="all")
+    if not valid_rows.empty:
+        latest_row = valid_rows.iloc[-1] # 가장 최근 행 (10월 데이터)
+    else:
+        latest_row = edited_history.iloc[0]
+
     staff_counts = {staff: {"open": 0, "close": 0} for staff in all_staff}
-    
-    # 예: 가장 최신 데이터가 담긴 행(예: 대상 월에 따라 10월 또는 입력된 마지막 월의 총합)을 가져옴
-    # 여기서는 직관적으로 편집된 표에서 마지막으로 유효한 값 혹은 10월/11월 누적치를 staff_counts에 반영
-    latest_month_row = edited_history.iloc[-1] # 혹은 target_month에 맞춰 매핑
-    for staff in staff_names:
-        if staff in staff_counts:
-            # 기존 오픈/마감 구분이 아니라 '총 합계' 수치를 활용하므로 이전 누적 총합(prev_total)으로 세팅
-            staff_counts[staff]["prev_total"] = int(latest_month_row.get(staff, 0))
-            staff_counts[staff]["open"] = 0
-            staff_counts[staff]["close"] = 0
+    for staff in all_staff:
+        if staff in staff_names:
+            val = latest_row.get(staff, 0)
+            prev_total = int(val) if pd.notna(val) else 0
+        else:
+            prev_total = 0
+            
+        staff_counts[staff]["prev_total"] = prev_total
+        staff_counts[staff]["open"] = 0
+        staff_counts[staff]["close"] = 0
+
+    schedule_results = []
     
     for bday in business_days:
         d_name = bday["day_name"]
         d_date = bday["date"]
         
-        # 총계 편차 1 이내 유지를 위한 전체 총합 기준 정렬
+        # [오픈 배정 정렬 로직 보완]
+        # 1순위: (기존 누적 총합 + 당월 배정 횟수)가 적은 사람
+        # 2순위: 동점일 경우 9월~10월에 누적된 과거 총합이 더 적었던 사람을 우선 배정하여 순번 밀림 방지
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
         avail_open.sort(key=lambda x: (
-            (staff_counts[x]["open"] + staff_counts[x]["close"]) + 
-            (staff_counts[x].get("prev_open", 0) + staff_counts[x].get("prev_close", 0)),
+            staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
+            staff_counts[x]["prev_total"],  # 과거 누적치가 적은 사람 우선
             staff_counts[x]["open"] + staff_counts[x]["close"]
         ))
         selected_open = avail_open[0] if avail_open else ""
@@ -165,14 +165,15 @@ if st.button("스케줄 생성하기"):
         if selected_open:
             staff_counts[selected_open]["open"] += 1
             
+        # [마감 배정 정렬 로직 보완] (김상혁 월/수 고정 제약 반영)
         avail_close = close_input.get(d_name, [])
         if d_name in ["월", "수"] and "김상혁" in avail_close:
             selected_close = "김상혁"
         else:
             other_avail = [s for s in avail_close if s != "김상혁"]
             other_avail.sort(key=lambda x: (
-                (staff_counts[x]["open"] + staff_counts[x]["close"]) + 
-                (staff_counts[x].get("prev_open", 0) + staff_counts[x].get("prev_close", 0)),
+                staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
+                staff_counts[x]["prev_total"],  # 과거 누적치가 적은 사람 우선
                 staff_counts[x]["open"] + staff_counts[x]["close"]
             ))
             if other_avail:
