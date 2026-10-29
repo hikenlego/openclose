@@ -78,33 +78,39 @@ for day in days:
     val = st.text_input(f"마감 - {day}요일", value=default_str, key=f"close_{day}")
     close_input[day] = [x.strip() for x in val.split(",") if x.strip()]
 
-st.header("2. 이전 달 누적 횟수 입력")
-all_staff = list(set([name for sub in open_input.values() for name in sub] + [name for sub in close_input.values() for name in sub]))
-if "김상혁" not in all_staff:
-    all_staff.append("김상혁")
+st.header("2. 이전 달 누적 횟수 입력 (월별 총계)")
 
-initial_counts = {
-    "김상혁": {"open": 0, "close": 16},
-    "김동환": {"open": 6, "close": 4},
-    "박라영": {"open": 6, "close": 4},
-    "정은성": {"open": 6, "close": 4},
-    "김범수": {"open": 6, "close": 4},
-    "허다인": {"open": 7, "close": 3},
-    "이현준": {"open": 7, "close": 4}
+# 1. 직원 이름 목록 정의
+staff_names = sorted(list(set([name for sub in open_input.values() for name in sub] + [name for sub in close_input.values() for name in sub])))
+if "김상혁" not in staff_names:
+    staff_names.append("김상혁")
+staff_names = sorted(staff_names)
+
+# 2. 엑셀 예시 기준 초기 데이터 설정 (행: 월, 열: 이름, 값: 오픈+마감 총 합계)
+initial_history_dict = {
+    "9월": {"김상혁": 8, "박라영": 5, "김동환": 5, "정은성": 5, "김범수": 4, "허다인": 4, "이현준": 4},
+    "10월": {"김상혁": 16, "박라영": 10, "김동환": 10, "정은성": 10, "김범수": 10, "허다인": 10, "이현준": 11},
+    "11월": {"김상혁": 16, "박라영": 10, "김동환": 10, "정은성": 10, "김범수": 10, "허다인": 10, "이현준": 11},  # 10월 최신 데이터 승계
+    "12월": {"김상혁": 16, "박라영": 10, "김동환": 10, "정은성": 10, "김범수": 10, "허다인": 10, "이현준": 11}   # 10월 최신 데이터 승계
 }
 
-history_data = []
-for staff in sorted(all_staff):
-    default_open_cnt = initial_counts.get(staff, {}).get("open", 0)
-    default_close_cnt = initial_counts.get(staff, {}).get("close", 0)
-    history_data.append({
-        "이름": staff,
-        "기존 총 오픈": default_open_cnt,
-        "기존 총 마감": default_close_cnt
-    })
+# 데이터프레임 구성 (행: 월, 열: 이름)
+history_table_data = []
+for month in ["9월", "10월", "11월", "12월"]:
+    row_dict = {"월": month}
+    for staff in staff_names:
+        row_dict[staff] = initial_history_dict.get(month, {}).get(staff, 0)
+    history_table_data.append(row_dict)
 
-history_df = pd.DataFrame(history_data)
+history_df = pd.DataFrame(history_table_data)
+# '월' 컬럼을 인덱스로 설정하여 엑셀과 같은 시각적 형태 구현
+history_df.set_index("월", inplace=True)
+
+st.info("9월부터 12월까지의 인원별 월 총 근무 횟수를 확인 및 수정하세요. (데이터가 없는 11, 12월은 최근 10월 기준 값이 자동 반영됩니다)")
 edited_history = st.data_editor(history_df, key="history_editor")
+
+# 스케줄 생성 시 참고할 누적 총합 데이터 추출 (가장 최신 월 또는 선택된 월 기준, 여기서는 10월 혹은 가장 최근 입력값 활용)
+# 만약 사용자가 수정을 했다면 수정된 11월/12월 데이터 중 가장 최신 데이터를 추적하거나, 타겟 월 직전 달의 누적치를 반영
 
 st.header("3. 일정 생성 및 날짜 설정")
 col1, col2 = st.columns(2)
@@ -129,13 +135,18 @@ if st.button("스케줄 생성하기"):
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
     schedule_results = []
+# 스케줄 생성 시 각 직원의 기준 누적 횟수 계산 (가장 최신에 입력된 누적 합계 수치 적용)
     staff_counts = {staff: {"open": 0, "close": 0} for staff in all_staff}
     
-    for idx, row in edited_history.iterrows():
-        s_name = row["이름"]
-        if s_name in staff_counts:
-            staff_counts[s_name]["prev_open"] = int(row["기존 총 오픈"])
-            staff_counts[s_name]["prev_close"] = int(row["기존 총 마감"])
+    # 예: 가장 최신 데이터가 담긴 행(예: 대상 월에 따라 10월 또는 입력된 마지막 월의 총합)을 가져옴
+    # 여기서는 직관적으로 편집된 표에서 마지막으로 유효한 값 혹은 10월/11월 누적치를 staff_counts에 반영
+    latest_month_row = edited_history.iloc[-1] # 혹은 target_month에 맞춰 매핑
+    for staff in staff_names:
+        if staff in staff_counts:
+            # 기존 오픈/마감 구분이 아니라 '총 합계' 수치를 활용하므로 이전 누적 총합(prev_total)으로 세팅
+            staff_counts[staff]["prev_total"] = int(latest_month_row.get(staff, 0))
+            staff_counts[staff]["open"] = 0
+            staff_counts[staff]["close"] = 0
     
     for bday in business_days:
         d_name = bday["day_name"]
