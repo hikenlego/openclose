@@ -242,27 +242,25 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
                     continue
                 current_done = staff_counts[s]["open"] + staff_counts[s]["close"]
                 target_q = target_nov_quotas.get(s, 0)
-                status_details.append(f"- **{s}**: 현재 {current_done}회 / 목표 쿼터 {target_q}회")
+                status_details.append(f"- {s}: 현재 {current_done}회 / 목표 쿼터 {target_q}회")
             
             status_str = "\n".join(status_details) if status_details else "- 가용 인원 없음"
             
-            # 남은 미배정 영업일(슬롯) 계산
             remaining_days_count = len(business_days) - len(schedule_results)
             
-            # 제언 메시지 구성: 금요일 마감 가용 인원(박라영, 김범수 등) 중 한 명의 쿼터를 늘려야 하는 이유 설명
             suggestion_staff_list = [s for s in avail_close_staff if not (s == "김상혁" and fail_day_name in ["월", "수"])]
             suggestion_str = ""
             if suggestion_staff_list:
                 example_name = suggestion_staff_list[0]
-                suggestion_str = f"👉 **구체적 제언:** 현재 **{fail_day_name}요일 마감**에 투입 가능한 인원({', '.join(suggestion_staff_list)}) 모두가 쿼터를 채워 막혔습니다. 슬라이더에서 **{example_name}** 씨(또는 가용 인원 중 한 명)의 최종 누적 횟수 목표를 **현재보다 최소 {remaining_days_count}회 이상 늘려** 잡으시거나, 1단계에서 금요일 마감 가용 인원에 다른 사람을 추가해 주세요."
+                suggestion_str = f"제언: 현재 {fail_day_name}요일 마감에 투입 가능한 인원({', '.join(suggestion_staff_list)}) 모두가 쿼터를 채워 막혔습니다. 슬라이더에서 {example_name} 씨의 최종 누적 횟수 목표를 현재보다 최소 {remaining_days_count}회 이상 늘려 잡으시거나, 1단계에서 금요일 마감 가용 인원에 다른 사람을 추가해 주세요."
             else:
-                suggestion_str = f"👉 **구체적 제언:** 슬라이더에서 전체 인원의 누적 횟수 목표를 재조정하여 남은 슬롯 수({remaining_days_count}개)를 소화할 수 있도록 배분해 주세요."
+                suggestion_str = f"제언: 슬라이더에서 전체 인원의 누적 횟수 목표를 재조정하여 남은 슬롯 수({remaining_days_count}개)를 소화할 수 있도록 배분해 주세요."
 
             st.error(
-                f"❌ 스케줄 생성 중단 및 오류 발생!\n\n"
-                f"**상세 원인:**\n{fail_reason}\n\n"
-                f"🔍 **[참고] {fail_day_name}요일 마감 가용 인원들의 현재 쿼터 현황:**\n{status_str}\n\n"
-                f"💡 **해결 가이드:**\n{suggestion_str}"
+                f"스케줄 생성 중단 및 오류 발생!\n\n"
+                f"상세 원인:\n{fail_reason}\n\n"
+                f"[참고] {fail_day_name}요일 마감 가용 인원들의 현재 쿼터 현황:\n{status_str}\n\n"
+                f"해결 가이드:\n{suggestion_str}"
             )
         else:
             mismatch = False
