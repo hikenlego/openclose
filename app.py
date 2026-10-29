@@ -134,7 +134,6 @@ if st.button("1단계: 날짜 설정 및 완벽한 초기 스케줄 시뮬레이
             
     st.session_state.staff_prev = staff_prev
 
-    # 슬라이더 키 초기화
     general_staff = [s for s in staff_names if s != "김상혁"]
     for staff in general_staff:
         if f"cumul_slider_{staff}" in st.session_state:
@@ -142,13 +141,11 @@ if st.button("1단계: 날짜 설정 및 완벽한 초기 스케줄 시뮬레이
         if f"nov_slider_{staff}" in st.session_state:
             del st.session_state[f"nov_slider_{staff}"]
 
-    # 1단계 실행 시 이전 생성 결과가 남아있다면 초기화
     if "schedule_results" in st.session_state:
         del st.session_state["schedule_results"]
     if "staff_counts" in st.session_state:
         del st.session_state["staff_counts"]
 
-    # 100% 성공하는 스케줄 시뮬레이션 빌드
     sanghyuk_closes = sum(1 for bday in business_days if bday["day_name"] in ["월", "수"])
     sim_staff_counts = {s: {"open": 0, "close": 0} for s in staff_names}
     
@@ -194,54 +191,62 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
     general_staff = [s for s in staff_names if s != "김상혁"]
     optimal_dict = st.session_state.optimal_nov_quotas
     
-    st.info(f"총 영업일수: {total_business_days}일 (오픈 총 {total_business_days}개, 일반 마감 총 {total_business_days - sanghyuk_closes}개)")
+    total_open_slots = total_business_days
+    total_general_close_slots = total_business_days - sanghyuk_closes
+    required_nov = total_open_slots + total_general_close_slots
+    
+    st.info(f"총 영업일수: {total_business_days}일 (오픈 총 {total_open_slots}개, 일반 마감 총 {total_general_close_slots}개 | **총 배정 필요 횟수: {required_nov}회**)")
     
     user_final_cumulatives = {}
     
+    # 개선 포인트: 슬라이더 최대치를 모든 인원이 공통으로 넉넉하게 잡거나, 남은 슬롯 기반 최대치로 통일하여 상대적 위치 가시화
+    max_slider_limit = required_nov  # 전체 슬롯 수로 최대치 통일하여 상대적 바 길이(위치) 비교 극대화
+    
     if slider_mode == "최종 누적 횟수 기준":
+        current_nov_sum = 0
+        temp_vals = {}
         for i, staff in enumerate(general_staff):
             prev = st.session_state.staff_prev.get(staff, 0)
             default_final = prev + optimal_dict.get(staff, 5)
-            val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=prev, max_value=prev+15, value=default_final, key=f"cumul_slider_{staff}")
-            user_final_cumulatives[staff] = val
+            val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=prev, max_value=prev + max_slider_limit, value=default_final, key=f"cumul_slider_{staff}")
+            temp_vals[staff] = val
+            current_nov_sum += (val - prev)
+
+        # 실시간 오차 가이드 제공
+        diff = current_nov_sum - required_nov
+        if diff != 0:
+            st.warning(f"⚠️ 현재 배정된 총 당월 횟수: **{current_nov_sum}회** (목표치인 {required_nov}회보다 **{abs(diff)}회 조절 필요**합니다. 누군가를 줄이면 다른 사람을 늘려 균형을 맞춰주세요!)")
+        else:
+            st.success("✨ 모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
+
+        for s in general_staff:
+            user_final_cumulatives[s] = temp_vals[s]
 
         sk_prev = st.session_state.staff_prev.get("김상혁", 0)
         sk_final = sk_prev + sanghyuk_closes
-        st.markdown(f"김상혁 (월/수 마감 전담): 이전 누적 {sk_prev}회 + 당월 마감 {sanghyuk_closes}회 = 최종 누적 {sk_final}회 (자동 고정)")
+        st.markdown(f"🔒 **김상혁 (월/수 마감 전담)**: 이전 누적 {sk_prev}회 + 당월 마감 {sanghyuk_closes}회 = **최종 누적 {sk_final}회** (자동 고정)")
         user_final_cumulatives["김상혁"] = sk_final
 
-        total_open_slots = total_business_days
-        total_general_close_slots = total_business_days - sanghyuk_closes
-        total_assigned_nov = sum(user_final_cumulatives[s] - st.session_state.staff_prev.get(s, 0) for s in general_staff)
-        required_nov = total_open_slots + total_general_close_slots
-
-        if total_assigned_nov != required_nov:
-            st.warning(f"현재 설정된 일반 인원 총 당월 근무 횟수({total_assigned_nov}회)가 배치해야 할 총 슬롯 수({required_nov}회)와 일치하지 않습니다. 오차: {total_assigned_nov - required_nov}회.")
-        else:
-            st.success("일반 인원 총 당월 근무 횟수가 완벽하게 일치합니다.")
-
     else:  # 당월 총 횟수 기준
-        total_open_slots = total_business_days
-        total_general_close_slots = total_business_days - sanghyuk_closes
-        required_nov = total_open_slots + total_general_close_slots
-        
+        current_nov_sum = 0
         target_nov_quotas_temp = {}
         for i, staff in enumerate(general_staff):
             prev = st.session_state.staff_prev.get(staff, 0)
             default_nov = optimal_dict.get(staff, 5)
-            val = st.slider(f"{staff} (당월 목표 횟수)", min_value=0, max_value=15, value=default_nov, key=f"nov_slider_{staff}")
+            val = st.slider(f"{staff} (당월 목표 횟수)", min_value=0, max_value=max_slider_limit, value=default_nov, key=f"nov_slider_{staff}")
             target_nov_quotas_temp[staff] = val
+            current_nov_sum += val
             user_final_cumulatives[staff] = prev + val
+
+        diff = current_nov_sum - required_nov
+        if diff != 0:
+            st.warning(f"⚠️ 현재 배정된 총 당월 횟수: **{current_nov_sum}회** (목표치인 {required_nov}회보다 **{abs(diff)}회 조절 필요**합니다. 누군가를 줄이면 다른 사람을 늘려 균형을 맞춰주세요!)")
+        else:
+            st.success("✨ 모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
 
         sk_prev = st.session_state.staff_prev.get("김상혁", 0)
         user_final_cumulatives["김상혁"] = sk_prev + sanghyuk_closes
-        st.markdown(f"김상혁 (월/수 마감 전담): 당월 마감 {sanghyuk_closes}회 (자동 고정)")
-
-        total_assigned_nov = sum(target_nov_quotas_temp.values())
-        if total_assigned_nov != required_nov:
-            st.warning(f"현재 설정된 일반 인원 총 당월 근무 횟수({total_assigned_nov}회)가 배치해야 할 총 슬롯 수({required_nov}회)와 일치하지 않습니다. 오차: {total_assigned_nov - required_nov}회.")
-        else:
-            st.success("일반 인원 총 당월 근무 횟수가 완벽하게 일치합니다.")
+        st.markdown(f"🔒 **김상혁 (월/수 마감 전담)**: 당월 마감 {sanghyuk_closes}회 (자동 고정)")
 
     if st.button("2단계: 최종 스케줄 생성하기"):
         business_days = st.session_state.business_days
@@ -305,7 +310,6 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             })
             
         if generation_failed:
-            # 핵심 수정: 생성 실패 시 기존에 남아있던 성공 결과/통계 항목들을 깔끔하게 삭제
             if "schedule_results" in st.session_state:
                 del st.session_state["schedule_results"]
             if "staff_counts" in st.session_state:
@@ -352,6 +356,8 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                     break
             
             if mismatch:
+                if "schedule_results" in st.session_state:
+                    del st.session_state["schedule_results"]
                 if "schedule_results" in st.session_state:
                     del st.session_state["schedule_results"]
                 if "staff_counts" in st.session_state:
