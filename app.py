@@ -109,4 +109,16 @@ if st.button("스케줄 생성하기"):
         else:
             other_avail = [s for s in avail_close if s != "김상혁"]
             other_avail.sort(key=lambda x: staff_counts[x]["close"] + staff_counts.get(x, {}).get("prev_close", 0))
-            selected_close = other_avail[0] if
+            if other_avail:
+                selected_close = other_avail[0]
+            else:
+                if d_name in ["월", "수"]:
+                    selected_close = "김상혁"
+                else:
+                    selected_close = ""
+        
+        if selected_open:
+            staff_counts[selected_open]["open"] += 1
+        if selected_close:
+            staff_counts[selected_close]["close"] += 1
+            
