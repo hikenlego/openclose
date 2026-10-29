@@ -63,9 +63,25 @@ all_staff = list(set([name for sub in open_input.values() for name in sub] + [na
 if "김상혁" not in all_staff:
     all_staff.append("김상혁")
 
+initial_counts = {
+    "김상혁": {"open": 0, "close": 16},
+    "김동환": {"open": 6, "close": 4},
+    "박라영": {"open": 6, "close": 4},
+    "정은성": {"open": 6, "close": 4},
+    "김범수": {"open": 6, "close": 4},
+    "허다인": {"open": 7, "close": 3},
+    "이현준": {"open": 7, "close": 4}
+}
+
 history_data = []
 for staff in sorted(all_staff):
-    history_data.append({"이름": staff, "기존 총 오픈": 5, "기존 총 마감": 5})
+    default_open_cnt = initial_counts.get(staff, {}).get("open", 0)
+    default_close_cnt = initial_counts.get(staff, {}).get("close", 0)
+    history_data.append({
+        "이름": staff,
+        "기존 총 오픈": default_open_cnt,
+        "기존 총 마감": default_close_cnt
+    })
 
 history_df = pd.DataFrame(history_data)
 edited_history = st.data_editor(history_df, key="history_editor")
