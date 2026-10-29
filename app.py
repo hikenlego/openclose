@@ -600,7 +600,259 @@ def build_footer_lines(gen, staff_counts):
     return lines
 
 
+# ---------------- 스케줄 저장용 QR (이미지에 넣고, 이미지를 올리면 복원) ----------------
+RULE_KEYS = ["close_open", "same_day", "consec_open", "weekly", "balance"]
+RULE_NAMES = {"close_open": "마감 직후 오픈 피하기", "same_day": "같은 날 오픈·마감 중복 피하기",
+              "consec_open": "연일 오픈 피하기", "weekly": "주별 쏠림 방지", "balance": "오픈·마감 비중 균등"}
+WEEKDAYS5 = ["월", "화", "수", "목", "금"]
+
+
+class _BitWriter:
+    def __init__(self):
+        self.v, self.n = 0, 0
+
+    def put(self, val, bits):
+        if not 0 <= val < (1 << bits):
+            raise ValueError(f"값이 범위를 벗어났습니다({val}, {bits}비트)")
+        self.v = (self.v << bits) | val
+        self.n += bits
+
+    def to_bytes(self):
+        pad = (-self.n) % 8
+        return (self.v << pad).to_bytes((self.n + pad) // 8, "big")
+
+
+class _BitReader:
+    def __init__(self, data):
+        self.v, self.n, self.pos = int.from_bytes(data, "big"), len(data) * 8, 0
+
+    def get(self, bits):
+        if self.pos + bits > self.n:
+            raise ValueError("QR 데이터가 짧습니다.")
+        val = (self.v >> (self.n - self.pos - bits)) & ((1 << bits) - 1)
+        self.pos += bits
+        return val
+
+    def prefix_bytes(self, pos):
+        pad = (-pos) % 8
+        return ((self.v >> (self.n - pos)) << pad).to_bytes((pos + pad) // 8, "big")
+
+
+def encode_schedule_payload(gen, results, staff_counts):
+    """생성 결과와 설정을 약 120바이트로 압축한 문자열 (QR용)"""
+    import base64
+    import re
+    import zlib
+    names = sorted(staff_counts)
+    n = len(names)
+    if n > 15:
+        raise ValueError("인원이 너무 많습니다")
+    idx_bits = max(1, (n - 1).bit_length())
+    w = _BitWriter()
+    w.put(1, 4)
+    m = re.match(r"(\d{4})\.(\d{2})\.(\d{2})-r(\d+)", APP_VERSION)
+    yy, mm, dd, rev = (int(m.group(1)) - 2000, int(m.group(2)), int(m.group(3)), int(m.group(4))) if m else (0, 0, 0, 0)
+    w.put(yy, 7)
+    w.put(mm, 4)
+    w.put(dd, 5)
+    w.put(rev, 6)
+    ts = datetime.datetime.strptime(gen["ts"], "%Y-%m-%d %H:%M")
+    w.put(int((ts - datetime.datetime(2020, 1, 1)).total_seconds() // 60), 26)
+    w.put(gen["year"] - 2000, 7)
+    w.put(gen["month"], 4)
+    for k in RULE_KEYS:
+        w.put(1 if gen["rules"].get(k) else 0, 1)
+    w.put(1 if gen["exclude_holidays"] else 0, 1)
+    w.put(3 if gen["slack"] is None else gen["slack"], 2)
+    extra = (gen["holiday_extra"] or "").strip().encode("utf-8")
+    w.put(len(extra), 8)
+    for b in extra:
+        w.put(b, 8)
+    w.put(n, 4)
+    for name in names:
+        b = name.encode("utf-8")
+        w.put(len(b), 6)
+        for x in b:
+            w.put(x, 8)
+    for d in WEEKDAYS5:
+        for key in ("open_input", "close_input"):
+            lst = gen[key].get(d, [])
+            for name in names:
+                w.put(1 if name in lst else 0, 1)
+    for name in names:
+        w.put(min(255, staff_counts[name]["prev_total"]), 8)
+    by_day = {r["일"]: r for r in results}
+    mask = 0
+    for day in by_day:
+        mask |= 1 << (day - 1)
+    w.put(mask, 31)
+    for day in sorted(by_day):
+        w.put(names.index(by_day[day]["오픈"]), idx_bits)
+        w.put(names.index(by_day[day]["마감"]), idx_bits)
+    w.put(zlib.crc32(w.to_bytes()) & 0xFFFF, 16)
+    return "S1." + base64.urlsafe_b64encode(w.to_bytes()).decode().rstrip("=")
+
+
+def decode_schedule_payload(text):
+    import base64
+    import zlib
+    text = text.strip()
+    if not text.startswith("S1."):
+        raise ValueError("이 프로그램에서 만든 QR이 아닙니다.")
+    b64 = text[3:]
+    data = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+    r = _BitReader(data)
+    if r.get(4) != 1:
+        raise ValueError("지원하지 않는 QR 형식입니다.")
+    yy, mm, dd, rev = r.get(7), r.get(4), r.get(5), r.get(6)
+    app_version = f"{2000 + yy}.{mm:02d}.{dd:02d}-r{rev}"
+    ts = (datetime.datetime(2020, 1, 1) + datetime.timedelta(minutes=r.get(26))).strftime("%Y-%m-%d %H:%M")
+    year, month = 2000 + r.get(7), r.get(4)
+    rules = {k: bool(r.get(1)) for k in RULE_KEYS}
+    exclude = bool(r.get(1))
+    sc = r.get(2)
+    slack = None if sc == 3 else sc
+    elen = r.get(8)
+    extra = bytes(r.get(8) for _ in range(elen)).decode("utf-8")
+    n = r.get(4)
+    names = []
+    for _ in range(n):
+        ln = r.get(6)
+        names.append(bytes(r.get(8) for _ in range(ln)).decode("utf-8"))
+    avail = {"open_input": {}, "close_input": {}}
+    for d in WEEKDAYS5:
+        for key in ("open_input", "close_input"):
+            lst = []
+            for name in names:
+                if r.get(1):
+                    lst.append(name)
+            avail[key][d] = lst
+    prev = {name: r.get(8) for name in names}
+    mask = r.get(31)
+    idx_bits = max(1, (n - 1).bit_length())
+    results = []
+    for day in [i + 1 for i in range(31) if (mask >> i) & 1]:
+        op = names[r.get(idx_bits)]
+        cl = names[r.get(idx_bits)]
+        results.append((day, op, cl))
+    pos = r.pos
+    if zlib.crc32(r.prefix_bytes(pos)) & 0xFFFF != r.get(16):
+        raise ValueError("QR 데이터가 손상되었습니다(검증 실패).")
+    return {"app_version": app_version, "ts": ts, "year": year, "month": month, "rules": rules,
+            "exclude_holidays": exclude, "slack": slack, "holiday_extra": extra, "names": names,
+            "open_input": avail["open_input"], "close_input": avail["close_input"], "prev": prev, "results": results}
+
+
+def restore_schedule_state(d):
+    """QR에서 읽은 데이터로 4~6번 섹션이 쓰는 세션 상태를 복원"""
+    year, month = d["year"], d["month"]
+    wnames = ["월", "화", "수", "목", "금", "토", "일"]
+    results, business_days = [], []
+    for day, op, cl in d["results"]:
+        dt = datetime.date(year, month, day)
+        dn = wnames[dt.weekday()]
+        business_days.append({"date": dt, "day_name": dn, "day_num": day})
+        results.append({"날짜": dt, "일": day, "요일": dn, "오픈": op, "마감": cl})
+    staff_counts = {nm: {"open": 0, "close": 0, "prev_total": d["prev"][nm]} for nm in d["names"]}
+    for r in results:
+        staff_counts[r["오픈"]]["open"] += 1
+        staff_counts[r["마감"]]["close"] += 1
+    quotas = {nm: c["open"] + c["close"] for nm, c in staff_counts.items() if nm != "김상혁"}
+    rules, slack = d["rules"], d["slack"]
+    slots, _, slot_week, _ = build_month_slots(business_days, d["open_input"], d["close_input"])
+    wcaps = build_week_caps(slots, slot_week, quotas, slack) if (rules["weekly"] and slack is not None) else None
+    rcaps = build_ratio_caps(slots, quotas, slack) if (rules["balance"] and slack is not None) else None
+    hm = get_holiday_map(year, d["holiday_extra"])
+    gen = {
+        "ts": d["ts"], "year": year, "month": month, "rules": dict(rules), "rule_names": dict(RULE_NAMES), "slack": slack,
+        "open_input": d["open_input"], "close_input": d["close_input"],
+        "holiday_extra": d["holiday_extra"], "exclude_holidays": d["exclude_holidays"],
+        "holidays": [f"{x.month}/{x.day}({nm})" for x, nm in sorted(hm.items())
+                     if x.year == year and x.month == month and x.weekday() < 5],
+        "check": quick_check(results, d["open_input"], d["close_input"], rules, staff_counts, quotas),
+    }
+    ss = st.session_state
+    for k in ["optimal_nov_quotas", "quota_note", "holiday_note"]:
+        if k in ss:
+            del ss[k]
+    ss.business_days = business_days
+    ss.staff_prev = dict(d["prev"])
+    ss.schedule_results = results
+    ss.staff_counts = staff_counts
+    ss.applied_rules = rules
+    ss.week_slack = slack
+    ss.week_caps = wcaps
+    ss.ratio_caps = rcaps
+    ss.gen_quotas = quotas
+    ss.gen_settings = gen
+
+
+def make_qr_array(text):
+    """OpenCV로 QR 생성 (오류 정정 M). 반환: 0/255 uint8 배열"""
+    import cv2
+    params = cv2.QRCodeEncoder_Params()
+    params.correction_level = cv2.QRCodeEncoder_CORRECT_LEVEL_M
+    params.mode = cv2.QRCodeEncoder_MODE_BYTE
+    return cv2.QRCodeEncoder_create(params).encode(text)
+
+
+def paste_qr(png_bytes, qr_arr, px, qr_h_in, dpi):
+    """렌더링된 달력 PNG의 오른쪽 아래 칸에 QR을 정수 배율로 붙임 (모서리가 번지지 않게)"""
+    import io as _io
+    from PIL import Image
+    base = Image.open(_io.BytesIO(png_bytes)).convert("RGB")
+    n = qr_arr.shape[0]
+    nearest = getattr(getattr(Image, "Resampling", Image), "NEAREST")
+    qr_img = Image.fromarray(qr_arr).convert("RGB").resize((n * px, n * px), nearest)
+    W, H = base.size
+    x_left = W - int(0.35 * dpi) - n * px
+    y_top = H - int(0.05 * dpi) - int(qr_h_in / 2 * dpi) - (n * px) // 2
+    base.paste(qr_img, (x_left, y_top))
+    out = _io.BytesIO()
+    base.save(out, format="PNG", dpi=(dpi, dpi))
+    return out.getvalue()
+
+
+def decode_qr_from_image(data):
+    """업로드된 이미지(PNG/JPG, 재압축·축소본 포함)에서 QR 문자열 추출"""
+    import cv2
+    import numpy as np
+    img = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        raise ValueError("이미지를 읽을 수 없습니다.")
+    h, w = img.shape
+    crop = img[int(h * 0.55):, int(w * 0.45):]
+    views = [img, crop,
+             cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC),
+             cv2.resize(img, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)]
+    det = cv2.QRCodeDetector()
+    for v in views:
+        for variant in (v, cv2.adaptiveThreshold(v, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 10)):
+            val, _, _ = det.detectAndDecode(variant)
+            if val:
+                return val
+    raise ValueError("이미지에서 QR을 찾지 못했습니다. 원본에 가까운 이미지(전체 화면, 오른쪽 아래 QR 포함)를 올려주세요.")
+
+
 st.title("근무 일정 자동 생성 프로그램")
+
+with st.expander("저장한 스케줄 이미지 불러오기 (QR 인식)"):
+    restore_file = st.file_uploader("이 프로그램이 만든 달력 이미지(PNG/JPG)를 올리면, 이미지 속 QR로 생성 당시 결과를 복원합니다",
+                                    type=["png", "jpg", "jpeg"], key="restore_uploader")
+    if restore_file is not None:
+        _sig = (restore_file.name, restore_file.size)
+        if st.session_state.get("restore_sig") != _sig:
+            st.session_state.restore_sig = _sig
+            try:
+                _d = decode_schedule_payload(decode_qr_from_image(restore_file.getvalue()))
+                restore_schedule_state(_d)
+                _note = "" if _d["app_version"] == APP_VERSION else f" (현재 프로그램 버전 {APP_VERSION}과 다른 버전에서 만든 결과입니다)"
+                st.session_state.restore_msg = ("ok", f"복원 완료: {_d['year']}년 {_d['month']}월 스케줄 (생성 {_d['ts']}, 프로그램 버전 {_d['app_version']}){_note}. 아래 4~6번 섹션에 표시됩니다.")
+            except Exception as _e:
+                st.session_state.restore_msg = ("err", f"불러오기 실패: {_e}")
+    _msg = st.session_state.get("restore_msg")
+    if _msg:
+        (st.success if _msg[0] == "ok" else st.error)(_msg[1])
 
 if "schedule_df" not in st.session_state:
     st.session_state.schedule_df = None
@@ -1046,6 +1298,7 @@ if "schedule_results" in st.session_state:
     copy_button(full_copy_text, "집계표 복사하기")
 
     st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
+    show_footer = st.checkbox("이미지 하단에 생성 조건 문구도 함께 표시 (QR에는 항상 저장됩니다)", value=False, key="show_footer")
 
     calendar.setfirstweekday(calendar.SUNDAY)
     month_matrix = calendar.monthcalendar(target_year, target_month)
@@ -1076,15 +1329,25 @@ if "schedule_results" in st.session_state:
         RED, BLUE, GRID = "#d93025", "#3f51d9", "#d4d4d4"
         n_rows = len(month_matrix)
         fig_w, title_h, head_h, row_h = 10.0, 0.55, 0.45, 1.35
-        footer = build_footer_lines(gen, st.session_state.staff_counts) if gen else []
+        footer = build_footer_lines(gen, st.session_state.staff_counts) if (gen and show_footer) else []
         footer_h = (0.25 + sum(0.36 if k == "h" else 0.23 for k, _ in footer)) if footer else 0.0
-        fig_h = title_h + head_h + n_rows * row_h + footer_h
+
+        qr_arr, qr_note = None, None
+        if gen:
+            try:
+                qr_arr = make_qr_array(encode_schedule_payload(gen, st.session_state.schedule_results, st.session_state.staff_counts))
+            except Exception as _qe:
+                qr_note = f"QR을 만들지 못해 이미지에 넣지 못했습니다 ({_qe}). requirements.txt에 opencv-python-headless가 있는지 확인하세요."
+        QR_PX = 4
+        qr_h = (qr_arr.shape[0] * QR_PX / 150 + 0.5) if qr_arr is not None else 0.0
+        bottom_h = footer_h + qr_h
+        fig_h = title_h + head_h + n_rows * row_h + bottom_h
         cw = fig_w / 7
 
-        fig = plt.figure(figsize=(fig_w, fig_h), facecolor="white")
+        fig = plt.figure(figsize=(fig_w + 0.2, fig_h + 0.13), facecolor="white")
         ax = fig.add_axes([0, 0, 1, 1])
-        ax.set_xlim(0, fig_w)
-        ax.set_ylim(0, fig_h)
+        ax.set_xlim(-0.1, fig_w + 0.1)
+        ax.set_ylim(-0.05, fig_h + 0.08)
         ax.axis("off")
 
         ax.text(0.08, fig_h - title_h / 2, f"{target_year}년 {target_month}월 근무표 (오픈 / 마감)",
@@ -1099,7 +1362,7 @@ if "schedule_results" in st.session_state:
         for y in [head_top, head_bottom] + [head_bottom - (r + 1) * row_h for r in range(n_rows)]:
             ax.plot([0, fig_w], [y, y], color=GRID, lw=1.0, solid_capstyle="butt")
         for k in range(8):
-            ax.plot([k * cw, k * cw], [footer_h, head_top], color=GRID, lw=1.0, solid_capstyle="butt")
+            ax.plot([k * cw, k * cw], [bottom_h, head_top], color=GRID, lw=1.0, solid_capstyle="butt")
 
         holiday_map = get_holiday_map(target_year, h_extra)
 
@@ -1121,7 +1384,7 @@ if "schedule_results" in st.session_state:
                             ha="left", va="center", fontsize=12, color=RED)
 
         if footer:
-            cursor = footer_h - 0.1
+            cursor = bottom_h - 0.1
             for kind, payload in footer:
                 if kind == "h":
                     ax.text(0.1, cursor - 0.12, payload, ha="left", va="top", fontsize=11.5, fontweight="bold", color="#111111")
@@ -1135,12 +1398,20 @@ if "schedule_results" in st.session_state:
                                 fontweight="bold" if kind == "rowh" else "normal")
                     cursor -= 0.23
 
-        buf = io.BytesIO()
-        fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", pad_inches=0.08, facecolor="white")
-        buf.seek(0)
+        if qr_arr is not None:
+            ax.text(0.1, qr_h / 2, "스케줄 복원용 QR (프로그램의 '이미지 불러오기'에서 사용)", ha="left", va="center", fontsize=9, color="#999999")
 
-        st.pyplot(fig)
+        raw = io.BytesIO()
+        fig.savefig(raw, format="png", dpi=150, facecolor="white")
         plt.close(fig)
+        final_png = raw.getvalue()
+        if qr_arr is not None:
+            final_png = paste_qr(final_png, qr_arr, QR_PX, qr_h, 150)
+        buf = io.BytesIO(final_png)
+
+        st.image(final_png)
+        if qr_note:
+            st.warning(qr_note)
 
         dl_col, cp_col = st.columns(2)
         with dl_col:
