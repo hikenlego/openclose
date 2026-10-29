@@ -114,15 +114,18 @@ with col2:
     target_month = st.number_input("월", min_value=1, max_value=12, value=11)
 
 if st.button("스케줄 생성하기"):
-    # 표준 월요일 시작 달력으로 영업일 추출 (월~금은 인덱스 0~4)
+    # 일요일 시작 기준으로 설정
+    calendar.setfirstweekday(calendar.SUNDAY)
     cal = calendar.monthcalendar(target_year, target_month)
     business_days = []
     
     for week in cal:
         for i, day in enumerate(week):
-            if day != 0 and i in [0, 1, 2, 3, 4]:
+            # 일요일 시작 기준: 0(일), 1(월), 2(화), 3(수), 4(목), 5(금), 6(토)
+            # 월~금에 해당하는 인덱스 1, 2, 3, 4, 5만 영업일로 추출
+            if day != 0 and i in [1, 2, 3, 4, 5]:
                 date_obj = datetime.date(target_year, target_month, day)
-                day_name = ["월", "화", "수", "목", "금", "토", "일"][i]
+                day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
     schedule_results = []
