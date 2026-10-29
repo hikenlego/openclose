@@ -2,11 +2,23 @@ import streamlit as st
 import pandas as pd
 import datetime
 import calendar
+import platform
 
 try:
     import matplotlib.pyplot as plt
+    import matplotlib.font_manager as fm
     import io
     HAS_MATPLOTLIB = True
+    
+    # OS별 한글 폰트 설정
+    if platform.system() == 'Windows':
+        plt.rc('font', family='Malgun Gothic')
+    elif platform.system() == 'Darwin':
+        plt.rc('font', family='AppleGothic')
+    else:
+        # 리눅스 (스트림릿 클라우드 환경 등)
+        plt.rc('font', family='NanumGothic')
+    plt.rcParams['axes.unicode_minus'] = False
 except ImportError:
     HAS_MATPLOTLIB = False
 
@@ -113,15 +125,18 @@ if st.button("스케줄 생성하기"):
             staff_counts[s_name]["prev_open"] = int(row["기존 총 오픈"])
             staff_counts[s_name]["prev_close"] = int(row["기존 총 마감"])
     
+    # 편차 1 이내 유지를 위해 전체 총합(기존+당월) 기준 오름차순 정렬 배정 알고리즘 적용
     for bday in business_days:
         d_name = bday["day_name"]
         d_date = bday["date"]
         
+        # 오픈 인원 선정 (기존 총 오픈 + 당월 오픈 횟수가 가장 적은 사람 우선)
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
         avail_open.sort(key=lambda x: staff_counts[x]["open"] + staff_counts.get(x, {}).get("prev_open", 0))
         selected_open = avail_open[0] if avail_open else ""
         
+        # 마감 인원 선정 (김상혁 월, 수 고정 / 그 외는 기존 총 마감 + 당월 마감 횟수 기준 최소 인원)
         avail_close = close_input.get(d_name, [])
         if d_name in ["월", "수"] and "김상혁" in avail_close:
             selected_close = "김상혁"
@@ -188,7 +203,7 @@ if "schedule_results" in st.session_state:
     full_copy_text = "\n".join(copy_texts)
     st.text_area("아래 내용을 복사하여 사용하세요", value=full_copy_text, height=150)
 
-    st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
+    st.header("5. 월간 캘린더 출력 및 이미지 다운로드/복사")
     
     month_matrix = calendar.monthcalendar(target_year, target_month)
     sched_dict = {item["일"]: {"오픈": item["오픈"], "마감": item["마감"]} for item in st.session_state.schedule_results}
@@ -225,12 +240,16 @@ if "schedule_results" in st.session_state:
         
         st.pyplot(fig)
         
-        st.download_button(
-            label="달력 이미지 다운로드",
-            data=buf,
-            file_name=f"{target_year}_{target_month}_schedule.png",
-            mime="image/png"
-        )
+        col_btn1, col_btn2 = st.columns(2)
+        with col_btn1:
+            st.download_button(
+                label="달력 이미지 다운로드",
+                data=buf,
+                file_name=f"{target_year}_{target_month}_schedule.png",
+                mime="image/png"
+            )
+        with col_btn2:
+            st.info("이미지 복사: 다운로드 버튼을 통해 저장된 이미지를 마우스 우클릭하여 복사하실 수 있습니다.")
     else:
         st.warning("matplotlib 라이브러리가 없어 표 형태로 대체합니다.")
         sched_df = pd.DataFrame(st.session_state.schedule_results)
