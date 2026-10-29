@@ -426,17 +426,11 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             st.success("모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
 
     st.markdown("**배정 시 피할 조건** (체크하면 적용, 해가 없으면 해제해 보세요)")
-    rc1, rc2, rc3, rc4, rc5 = st.columns(5)
-    with rc1:
-        rule_close_open = st.checkbox("마감 직후 오픈 피하기", value=True, key="rule_close_open")
-    with rc2:
-        rule_same_day = st.checkbox("같은 날 오픈·마감 중복 피하기", value=True, key="rule_same_day")
-    with rc3:
-        rule_consec_open = st.checkbox("연일 오픈 피하기", value=True, key="rule_consec_open")
-    with rc4:
-        rule_weekly = st.checkbox("주별 쏠림 방지", value=True, key="rule_weekly")
-    with rc5:
-        rule_balance = st.checkbox("오픈·마감 비중 균등", value=True, key="rule_balance")
+    rule_close_open = st.checkbox("마감 직후 오픈 피하기", value=True, key="rule_close_open")
+    rule_same_day = st.checkbox("같은 날 오픈·마감 중복 피하기", value=True, key="rule_same_day")
+    rule_consec_open = st.checkbox("연일 오픈 피하기", value=True, key="rule_consec_open")
+    rule_weekly = st.checkbox("주별 쏠림 방지", value=True, key="rule_weekly")
+    rule_balance = st.checkbox("오픈·마감 비중 균등", value=True, key="rule_balance")
 
     if st.button("2단계: 최종 스케줄 생성하기"):
         business_days = st.session_state.business_days
