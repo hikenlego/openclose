@@ -222,7 +222,8 @@ if "schedule_results" in st.session_state:
     st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
     
   # 일요일 시작(firstweekday=6)으로 정확하게 달력 매트릭스 생성
-    month_matrix = calendar.Calendar(firstweekday=6).monthcalendar(target_year, target_month)
+    calendar.setfirstweekday(calendar.SUNDAY)
+    month_matrix = calendar.monthcalendar(target_year, target_month)
     
     sched_dict = {item["일"]: {"오픈": item["오픈"], "마감": item["마감"]} for item in st.session_state.schedule_results}
     
