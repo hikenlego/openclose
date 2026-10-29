@@ -125,45 +125,66 @@ if st.button("스케줄 생성하기"):
                 day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
-    staff_counts = {staff: {"open": 0, "close": 0} for staff in staff_names}
+    # 1. 10월까지의 누적 데이터 가져오기
+    staff_prev = {}
     for staff in staff_names:
         if staff in edited_history.index:
             val = edited_history.loc[staff, "10월"]
-            prev_total = int(val) if pd.notna(val) else 0
+            staff_prev[staff] = int(val) if pd.notna(val) else 0
         else:
-            prev_total = 0
-            
-        staff_counts[staff]["prev_total"] = prev_total
-        staff_counts[staff]["open"] = 0
-        staff_counts[staff]["close"] = 0
+            staff_prev[staff] = 0
 
+    # 2. [핵심] 11월 개인별 목표 근무 횟수 사전 할당
+    # 김상혁 씨는 고정 제약이 있으므로 일반 인원 6명(동환, 범수, 라영, 현준, 은성, 다인)을 대상으로 합니다.
+    # 9~10월 누적이 상대적으로 많은 인원(예: 라영, 은성, 현준 등 누적이 높았던 순서)에게 15회 부여, 나머지 16회 부여
+    # 총 영업일수와 김상혁 마감 횟수를 고려하여 15회 2명, 16회 4명으로 정확히 분배합니다.
+    
+    general_staff = [s for s in staff_names if s != "김상혁"]
+    # 9~10월 누적치가 높은 순서대로 정렬하여 상위 2명에게 15회 목표 부여
+    general_staff.sort(key=lambda x: staff_prev[x], reverse=True)
+    
+    target_quotas = {}
+    for i, staff in enumerate(general_staff):
+        if i < 2:  # 누적이 상대적으로 많은 상위 2명 (예: 라영, 은성/현준 등)
+            target_quotas[staff] = 15
+        else:
+            target_quotas[staff] = 16
+            
+    # 김상혁 씨는 마감 전담이므로 총 마감 횟수(영업일수와 동일)를 목표로 설정
+    target_quotas["김상혁"] = len(business_days)
+
+    # 초기 상태 설정
+    staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev[staff]} for staff in staff_names}
     schedule_results = []
     
     for bday in business_days:
         d_name = bday["day_name"]
         d_date = bday["date"]
         
-        # 오픈 배정 정렬: 전체 누적 총합 오름차순, 동점시 당월 배정 적은 순
+        # --- [오픈 배정] ---
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
+        
+        # 정렬 기준: (현재 배정된 오픈 횟수) - (자신의 목표 오픈 쿼터 대비 비율) 또는 잔여 쿼터 부족한 사람 우선
+        # 여기서는 목표 횟수(15 또는 16) 대비 현재까지 채운 횟수의 비율이 가장 낮은 사람을 우선 선택
         avail_open.sort(key=lambda x: (
-            staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
-            staff_counts[x]["open"] + staff_counts[x]["close"]
+            staff_counts[x]["open"] / target_quotas[x],  # 목표 대비 달성률이 낮을수록 우선
+            staff_counts[x]["open"]                      # 당월 오픈이 적은 순
         ))
         selected_open = avail_open[0] if avail_open else ""
         
         if selected_open:
             staff_counts[selected_open]["open"] += 1
             
-        # 마감 배정 정렬 (김상혁 월/수 고정 제약 반영)
+        # --- [마감 배정] ---
         avail_close = close_input.get(d_name, [])
         if d_name in ["월", "수"] and "김상혁" in avail_close:
             selected_close = "김상혁"
         else:
             other_avail = [s for s in avail_close if s != "김상혁"]
             other_avail.sort(key=lambda x: (
-                staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
-                staff_counts[x]["open"] + staff_counts[x]["close"]
+                staff_counts[x]["close"] / target_quotas[x],  # 목표 대비 마감 달성률이 낮을수록 우선
+                staff_counts[x]["close"]                      # 당월 마감이 적은 순
             ))
             if other_avail:
                 selected_close = other_avail[0]
@@ -186,7 +207,7 @@ if st.button("스케줄 생성하기"):
         
     st.session_state.schedule_results = schedule_results
     st.session_state.staff_counts = staff_counts
-    st.success("스케줄이 성공적으로 생성되었습니다!")
+    st.success("사전 목표 쿼터제 기반 스케줄이 성공적으로 생성되었습니다!")
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
