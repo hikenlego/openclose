@@ -339,6 +339,72 @@ def compute_initial_quotas(business_days, open_input, close_input, general_staff
     return ideal, "가용 인원 제약으로 균등 쿼터를 확정하지 못했습니다. 슬라이더를 직접 조절하세요."
 
 
+def copy_button(text, label="클립보드에 복사"):
+    """클릭 한 번으로 텍스트를 클립보드에 복사하는 버튼 (clipboard API, 막히면 execCommand로 대체)"""
+    import json
+    import streamlit.components.v1 as components
+    payload = json.dumps(text).replace("</", "<\\/")
+    components.html(
+        """
+<button id="cb" style="padding:0.45rem 1rem;border:1px solid #888;border-radius:0.5rem;background:transparent;color:inherit;cursor:pointer;font-size:14px;"></button>
+<script>
+const t = """ + payload + """;
+const label = """ + json.dumps(label) + """;
+const b = document.getElementById('cb');
+b.textContent = label;
+function fallbackCopy() {
+  const a = document.createElement('textarea');
+  a.value = t; document.body.appendChild(a); a.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(a);
+  return ok;
+}
+b.onclick = async () => {
+  let ok = false;
+  try { await navigator.clipboard.writeText(t); ok = true; } catch (e) { ok = fallbackCopy(); }
+  b.textContent = ok ? '복사 완료!' : '복사 실패 - 위 텍스트 상자에서 직접 복사하세요';
+  setTimeout(() => { b.textContent = label; }, 1800);
+};
+</script>
+""",
+        height=50,
+    )
+
+
+def copy_image_button(png_bytes, label="클립보드에 복사"):
+    """PNG 이미지를 클릭 한 번으로 클립보드에 복사하는 버튼 (브라우저가 막으면 실패 안내)"""
+    import base64
+    import json
+    import streamlit.components.v1 as components
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+    components.html(
+        """
+<button id="cb" style="padding:0.45rem 1rem;border:1px solid #888;border-radius:0.5rem;background:transparent;color:inherit;cursor:pointer;font-size:14px;"></button>
+<script>
+const b64 = \"""" + b64 + """\";
+const label = """ + json.dumps(label) + """;
+const b = document.getElementById('cb');
+b.textContent = label;
+b.onclick = async () => {
+  let ok = false;
+  try {
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const blob = new Blob([arr], { type: 'image/png' });
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    ok = true;
+  } catch (e) { ok = false; }
+  b.textContent = ok ? '복사 완료!' : '복사 실패 - 왼쪽 다운로드 버튼을 이용하세요';
+  setTimeout(() => { b.textContent = label; }, 2200);
+};
+</script>
+""",
+        height=50,
+    )
+
+
 st.title("근무 일정 자동 생성 프로그램")
 
 if "schedule_df" not in st.session_state:
@@ -748,6 +814,7 @@ if "schedule_results" in st.session_state:
     st.subheader("복사 텍스트 양식")
     full_copy_text = "\n".join(copy_texts)
     st.text_area("아래 내용을 복사하여 사용하세요", value=full_copy_text, height=150)
+    copy_button(full_copy_text, "집계표 복사하기")
 
     st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
 
@@ -788,12 +855,16 @@ if "schedule_results" in st.session_state:
 
         st.pyplot(fig)
 
-        st.download_button(
-            label="달력 이미지 다운로드",
-            data=buf,
-            file_name=f"{target_year}_{target_month}_schedule.png",
-            mime="image/png"
-        )
+        dl_col, cp_col = st.columns(2)
+        with dl_col:
+            st.download_button(
+                label="달력 이미지 다운로드",
+                data=buf,
+                file_name=f"{target_year}_{target_month}_schedule.png",
+                mime="image/png"
+            )
+        with cp_col:
+            copy_image_button(buf.getvalue(), "이미지 클립보드에 복사")
     else:
         st.warning("matplotlib 라이브러리가 없어 표 형태로 대체합니다.")
         sched_df = pd.DataFrame(st.session_state.schedule_results)
@@ -963,3 +1034,4 @@ if "schedule_results" in st.session_state:
 
     verify_text = "\n".join(f"{n}: {'일치' if ok else '불일치'} ({d})" for n, ok, d in summary)
     st.text_area("검증 결과 복사용 텍스트", value=verify_text, height=150)
+    copy_button(verify_text, "검증 결과 복사하기")
