@@ -219,18 +219,8 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
         user_final_cumulatives["김상혁"] = sk_final
 
         diff = current_nov_sum - required_nov
-        if diff < 0:
-            increase_candidates = general_staff
-            st.warning(
-                f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회보다 {abs(diff)}회 부족합니다.)\n\n"
-                f"목표를 늘릴 수 있는 추천 인원: {', '.join(increase_candidates)}"
-            )
-        elif diff > 0:
-            decrease_candidates = [s for s in general_staff if (user_final_cumulatives[s] - st.session_state.staff_prev.get(s, 0)) > 1]
-            st.warning(
-                f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회보다 {diff}회 초과되었습니다.)\n\n"
-                f"목표를 줄일 수 있는 추천 인원: {', '.join(decrease_candidates)}"
-            )
+        if diff != 0:
+            st.warning(f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회와 차이: {diff:+d}회). 2단계를 실행하여 가용성 기반 추천 가이드를 확인하세요.")
         else:
             st.success("모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
 
@@ -250,18 +240,8 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
         st.markdown(f"김상혁 (월/수 마감 전담): 당월 마감 {sanghyuk_closes}회 (자동 고정)")
 
         diff = current_nov_sum - required_nov
-        if diff < 0:
-            increase_candidates = general_staff
-            st.warning(
-                f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회보다 {abs(diff)}회 부족합니다.)\n\n"
-                f"목표를 늘릴 수 있는 추천 인원: {', '.join(increase_candidates)}"
-            )
-        elif diff > 0:
-            decrease_candidates = [s for s in general_staff if target_nov_quotas_temp[s] > 1]
-            st.warning(
-                f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회보다 {diff}회 초과되었습니다.)\n\n"
-                f"목표를 줄일 수 있는 추천 인원: {', '.join(decrease_candidates)}"
-            )
+        if diff != 0:
+            st.warning(f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회와 차이: {diff:+d}회). 2단계를 실행하여 가용성 기반 추천 가이드를 확인하세요.")
         else:
             st.success("모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
 
@@ -343,7 +323,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             
             status_str = "\n".join(status_details) if status_details else "- 가용 인원 없음"
             
-            # 지능형 가용성 시뮬레이션 기반 추천 인원 추출
+            # 정확한 가용성 매칭 기반 추천 인원 추출
             increase_candidates = [s for s in avail_close_staff if not (s == "김상혁" and fail_day_name in ["월", "수"]) and (staff_counts[s]["open"] + staff_counts[s]["close"]) >= target_nov_quotas.get(s, 0)]
             if not increase_candidates:
                 increase_candidates = [s for s in avail_close_staff if not (s == "김상혁" and fail_day_name in ["월", "수"])]
@@ -353,9 +333,9 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                 decrease_candidates = [s for s in general_staff if target_nov_quotas.get(s, 0) > 1]
 
             suggestion_str = (
-                f"제언: 현재 {fail_day_name}요일 마감 슬롯에 투입 가능한 가용 인원의 쿼터가 부족하거나 막혔습니다.\n"
-                f"- [가용성 분석 - 늘려야 할 추천 인원]: {', '.join(increase_candidates)}\n"
-                f"- [가용성 분석 - 줄여야 할 추천 인원(여유 인원)]: {', '.join(decrease_candidates)}\n\n"
+                f"제언: 현재 {fail_day_name}요일 마감 슬롯에 투입 가능한 가용 인원의 쿼터가 꽉 차서 막혔습니다.\n"
+                f"- [가용성 매칭 - 늘려야 할 추천 인원]: {', '.join(increase_candidates)}\n"
+                f"- [가용성 매칭 - 줄여야 할 추천 인원(여유 인원)]: {', '.join(decrease_candidates)}\n\n"
                 f"팁: 위쪽 1단계 버튼을 다시 누르시면 언제든 완벽하게 성공하는 초기 모범 스케줄 상태로 슬라이더가 확실하게 초기화됩니다!"
             )
 
