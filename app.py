@@ -113,11 +113,22 @@ def build_week_caps(slots, slot_week, quotas, slack):
     return {(p, w): -(-quotas[p] * n // total) + slack for p in quotas for w, n in week_slots.items()}
 
 
-def solve_with_rules(slots, avail, quotas, slot_week, conflicts, caps, node_limit):
+def build_ratio_caps(slots, quotas, slack):
+    """개인별 (오픈 상한, 마감 상한) = ceil(쿼터 x 전체 중 해당 슬롯 비율) + 여유분. slack=None이면 상한 없음"""
+    if slack is None:
+        return None
+    total = len(slots)
+    n_open = sum(1 for s in slots if s[1] == "오픈")
+    n_close = total - n_open
+    return {p: (-(-quotas[p] * n_open // total) + slack, -(-quotas[p] * n_close // total) + slack) for p in quotas}
+
+
+def solve_with_rules(slots, avail, quotas, slot_week, conflicts, caps, ratio_caps, node_limit):
     """DFS + 가장 제약 큰 슬롯 우선 + 전방 검사. 반환 (owner, status) status: ok/infeasible/limit"""
     rem = dict(quotas)
     owner = {}
     wk = {p: {} for p in quotas}
+    kc = {p: [0, 0] for p in quotas}
     unassigned = set(slots)
     order_index = {s: i for i, s in enumerate(slots)}
     nodes = [0]
@@ -130,6 +141,8 @@ def solve_with_rules(slots, avail, quotas, slot_week, conflicts, caps, node_limi
             if p not in rem or rem[p] <= 0:
                 continue
             if caps is not None and wk[p].get(w, 0) >= caps.get((p, w), 0):
+                continue
+            if ratio_caps is not None and kc[p][0 if s[1] == "오픈" else 1] >= ratio_caps[p][0 if s[1] == "오픈" else 1]:
                 continue
             if any(owner.get(n) == p for n in conflicts[s]):
                 continue
@@ -156,15 +169,18 @@ def solve_with_rules(slots, avail, quotas, slot_week, conflicts, caps, node_limi
             if rem[p] > cover[p]:
                 return False
         w = slot_week[best]
-        best_c.sort(key=lambda p: (wk[p].get(w, 0), -rem[p], p))
+        ki = 0 if best[1] == "오픈" else 1
+        best_c.sort(key=lambda p: (wk[p].get(w, 0), kc[p][ki], -rem[p], p))
         for p in best_c:
             owner[best] = p
             rem[p] -= 1
             wk[p][w] = wk[p].get(w, 0) + 1
+            kc[p][ki] += 1
             unassigned.discard(best)
             if dfs():
                 return True
             unassigned.add(best)
+            kc[p][ki] -= 1
             wk[p][w] -= 1
             rem[p] += 1
             del owner[best]
@@ -178,18 +194,19 @@ def solve_with_rules(slots, avail, quotas, slot_week, conflicts, caps, node_limi
 
 
 def solve_schedule(slots, avail, quotas, slot_week, slot_date, rules, node_limit=40000):
-    """주간 상한을 단계적으로 완화(0 -> +1 -> +2 -> 없음)하며 해 탐색.
-    반환 (owner, slack, caps, status)"""
+    """주간 상한/오픈·마감 비중 상한을 단계적으로 완화(0 -> +1 -> +2 -> 없음)하며 해 탐색.
+    반환 (owner, slack, week_caps, ratio_caps, status)"""
     conflicts = build_conflicts(slots, slot_date, rules)
-    levels = [0, 1, 2, None] if rules.get("weekly") else [None]
+    levels = [0, 1, 2, None] if (rules.get("weekly") or rules.get("balance")) else [None]
     status = "infeasible"
     for slack in levels:
-        caps = build_week_caps(slots, slot_week, quotas, slack)
+        wcaps = build_week_caps(slots, slot_week, quotas, slack) if rules.get("weekly") else None
+        rcaps = build_ratio_caps(slots, quotas, slack) if rules.get("balance") else None
         limit = node_limit * 3 if slack is None else node_limit
-        owner, status = solve_with_rules(slots, avail, quotas, slot_week, conflicts, caps, limit)
+        owner, status = solve_with_rules(slots, avail, quotas, slot_week, conflicts, wcaps, rcaps, limit)
         if owner is not None:
-            return owner, slack, caps, "ok"
-    return None, None, None, status
+            return owner, slack, wcaps, rcaps, "ok"
+    return None, None, None, None, status
 
 
 st.title("근무 일정 자동 생성 프로그램")
@@ -365,10 +382,11 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
     if slider_mode == "최종 누적 횟수 기준":
         current_nov_sum = 0
         temp_vals = {}
+        slider_min = min(st.session_state.staff_prev.get(s, 0) for s in general_staff)
         for i, staff in enumerate(general_staff):
             prev = st.session_state.staff_prev.get(staff, 0)
             default_final = prev + optimal_dict.get(staff, 5)
-            val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=prev, max_value=30, value=default_final, key=f"cumul_slider_{staff}")
+            val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=slider_min, max_value=30, value=default_final, key=f"cumul_slider_{staff}")
             temp_vals[staff] = val
             current_nov_sum += (val - prev)
 
@@ -408,7 +426,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             st.success("모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
 
     st.markdown("**배정 시 피할 조건** (체크하면 적용, 해가 없으면 해제해 보세요)")
-    rc1, rc2, rc3, rc4 = st.columns(4)
+    rc1, rc2, rc3, rc4, rc5 = st.columns(5)
     with rc1:
         rule_close_open = st.checkbox("마감 직후 오픈 피하기", value=True, key="rule_close_open")
     with rc2:
@@ -417,6 +435,8 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
         rule_consec_open = st.checkbox("연일 오픈 피하기", value=True, key="rule_consec_open")
     with rc4:
         rule_weekly = st.checkbox("주별 쏠림 방지", value=True, key="rule_weekly")
+    with rc5:
+        rule_balance = st.checkbox("오픈·마감 비중 균등", value=True, key="rule_balance")
 
     if st.button("2단계: 최종 스케줄 생성하기"):
         business_days = st.session_state.business_days
@@ -454,8 +474,12 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                 avail[sc] = [s for s in close_input.get(d_name, []) if s != "김상혁"]
                 slot_label[sc] = f"{day_label} 마감"
 
+        neg_quota = [f"{k}({v:+d}회)" for k, v in quotas.items() if v < 0]
         quota_sum = sum(quotas.values())
-        if quota_sum != len(slots):
+        if neg_quota:
+            clear_results()
+            st.error(f"당월 횟수가 음수가 된 인원이 있습니다: {', '.join(neg_quota)}. 최종 누적 슬라이더를 이전 누적 이상으로 올려주세요. (이전 결과물 초기화됨)")
+        elif quota_sum != len(slots):
             clear_results()
             st.error(
                 f"쿼터 총합 불일치: 일반 인원 쿼터 합 {quota_sum}회 / 배정할 슬롯 {len(slots)}개 "
@@ -507,14 +531,16 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                     "same_day": rule_same_day,
                     "consec_open": rule_consec_open,
                     "weekly": rule_weekly,
+                    "balance": rule_balance,
                 }
                 rule_names = {
                     "close_open": "마감 직후 오픈 피하기",
                     "same_day": "같은 날 오픈·마감 중복 피하기",
                     "consec_open": "연일 오픈 피하기",
                     "weekly": "주별 쏠림 방지",
+                    "balance": "오픈·마감 비중 균등",
                 }
-                owner, week_slack, week_caps, rstatus = solve_schedule(slots, avail, quotas, slot_week, slot_date, rules)
+                owner, week_slack, week_caps, ratio_caps, rstatus = solve_schedule(slots, avail, quotas, slot_week, slot_date, rules)
 
                 if owner is None:
                     clear_results()
@@ -523,7 +549,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                     for k in active:
                         trial = dict(rules)
                         trial[k] = False
-                        o2, _, _, st2 = solve_schedule(slots, avail, quotas, slot_week, slot_date, trial, node_limit=20000)
+                        o2, _, _, _, st2 = solve_schedule(slots, avail, quotas, slot_week, slot_date, trial, node_limit=20000)
                         if o2 is not None:
                             relax_ok.append(rule_names[k])
                     if rstatus == "limit":
@@ -571,12 +597,13 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                     st.session_state.applied_rules = rules
                     st.session_state.week_slack = week_slack
                     st.session_state.week_caps = week_caps
+                    st.session_state.ratio_caps = ratio_caps
                     st.session_state.gen_quotas = dict(quotas)
-                    if rules["weekly"]:
+                    if rules["weekly"] or rules["balance"]:
                         if week_slack is None:
-                            week_note = " (주별 상한은 모두 완화되어 적용되지 못했습니다)"
+                            week_note = " (주별 상한·오픈/마감 균등 상한은 모두 완화되어 적용되지 못했습니다)"
                         else:
-                            week_note = f" (주별 상한: 기준 비율 +{week_slack}회 이내)"
+                            week_note = f" (주별 상한·오픈/마감 균등: 기준 비율 +{week_slack}회 이내)"
                     else:
                         week_note = ""
                     st.success("지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다!" + week_note)
@@ -771,6 +798,17 @@ if "schedule_results" in st.session_state:
         row["최대"] = max(week_table[person].values())
         week_rows.append(row)
 
+    ratio_caps = st.session_state.get("ratio_caps")
+    balance_problems = []
+    if applied.get("balance") and ratio_caps:
+        for person, (oc, cc) in ratio_caps.items():
+            c = cal_counts.get(person, {"open": 0, "close": 0})
+            if c["open"] > oc:
+                balance_problems.append(f"{person} 오픈 {c['open']}회 > 상한 {oc}회")
+            if c["close"] > cc:
+                balance_problems.append(f"{person} 마감 {c['close']}회 > 상한 {cc}회")
+    one_sided = [f"{p} 오픈 {c['open']}/마감 {c['close']}" for p, c in sorted(cal_counts.items()) if p != "김상혁" and (c["open"] == 0 or c["close"] == 0)]
+
     caps = st.session_state.get("week_caps")
     cap_problems = []
     if applied.get("weekly") and caps:
@@ -793,6 +831,11 @@ if "schedule_results" in st.session_state:
         summary.append(("주별 상한 이내 (적용 중)", not cap_problems, "상한 이내" if not cap_problems else "; ".join(cap_problems)))
     else:
         summary.append(("주별 쏠림 방지 (해제됨, 참고)", True, "아래 주별 분포표 참고"))
+
+    if applied.get("balance"):
+        summary.append(("오픈·마감 비중 균등 (적용 중)", not balance_problems, "개인별 상한 이내" if not balance_problems else "; ".join(balance_problems)))
+    else:
+        summary.append(("오픈·마감 비중 균등 (해제됨, 참고)", True, "한쪽만 근무한 인원 없음" if not one_sided else "한쪽만 근무: " + "; ".join(one_sided)))
 
     all_pass = all(ok for _, ok, _ in summary)
     if all_pass:
