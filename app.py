@@ -343,19 +343,21 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             
             status_str = "\n".join(status_details) if status_details else "- 가용 인원 없음"
             
-            suggestion_staff_list = [s for s in avail_close_staff if not (s == "김상혁" and fail_day_name in ["월", "수"])]
-            reducible_staff_list = [s for s in general_staff if target_nov_quotas.get(s, 0) > 1]
-            
-            suggestion_str = ""
-            if suggestion_staff_list and reducible_staff_list:
-                suggestion_str = (
-                    f"제언: 현재 {fail_day_name}요일 마감에 투입 가능한 모든 인원이 쿼터를 다 채웠습니다.\n"
-                    f"- 늘려야 할 후보 인원 (아래 중 택 1하여 목표를 늘려주세요):\n  {', '.join([s for s in suggestion_staff_list])}\n"
-                    f"- 줄여야 할 후보 인원 (총합 유지를 위해 아래 중 택 1하여 목표를 줄여주세요):\n  {', '.join([s for s in reducible_staff_list])}\n\n"
-                    f"팁: 위쪽 1단계 버튼을 다시 누르시면 언제든 완벽하게 성공하는 초기 모범 스케줄 상태로 슬라이더가 확실하게 초기화됩니다!"
-                )
-            else:
-                suggestion_str = "제언: 슬라이더에서 전체 인원의 누적 횟수 목표를 재조정하여 요일별 가용 인원과 쿼터 균형을 맞춰주세요."
+            # 지능형 가용성 시뮬레이션 기반 추천 인원 추출
+            increase_candidates = [s for s in avail_close_staff if not (s == "김상혁" and fail_day_name in ["월", "수"]) and (staff_counts[s]["open"] + staff_counts[s]["close"]) >= target_nov_quotas.get(s, 0)]
+            if not increase_candidates:
+                increase_candidates = [s for s in avail_close_staff if not (s == "김상혁" and fail_day_name in ["월", "수"])]
+                
+            decrease_candidates = [s for s in general_staff if target_nov_quotas.get(s, 0) > (staff_counts[s]["open"] + staff_counts[s]["close"]) and target_nov_quotas.get(s, 0) > 1]
+            if not decrease_candidates:
+                decrease_candidates = [s for s in general_staff if target_nov_quotas.get(s, 0) > 1]
+
+            suggestion_str = (
+                f"제언: 현재 {fail_day_name}요일 마감 슬롯에 투입 가능한 가용 인원의 쿼터가 부족하거나 막혔습니다.\n"
+                f"- [가용성 분석 - 늘려야 할 추천 인원]: {', '.join(increase_candidates)}\n"
+                f"- [가용성 분석 - 줄여야 할 추천 인원(여유 인원)]: {', '.join(decrease_candidates)}\n\n"
+                f"팁: 위쪽 1단계 버튼을 다시 누르시면 언제든 완벽하게 성공하는 초기 모범 스케줄 상태로 슬라이더가 확실하게 초기화됩니다!"
+            )
 
             st.error(
                 f"스케줄 생성 중단 및 오류 발생!\n"
