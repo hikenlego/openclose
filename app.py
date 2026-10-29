@@ -126,11 +126,10 @@ if st.button("스케줄 생성하기"):
                 day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
-    # [핵심] 수정된 표(행: 이름, 열: 월)에서 가장 최신 확정 월인 '10월' 컬럼의 값을 기준(prev_total)으로 가져옴
+    # 10월 데이터 기준 직전 누적치(prev_total) 불러오기
     staff_counts = {staff: {"open": 0, "close": 0} for staff in staff_names}
     for staff in staff_names:
         if staff in edited_history.index:
-            # 10월 데이터를 기준으로 직전 누적치 설정 (값이 없으면 0)
             val = edited_history.loc[staff, "10월"]
             prev_total = int(val) if pd.notna(val) else 0
         else:
@@ -146,13 +145,14 @@ if st.button("스케줄 생성하기"):
         d_name = bday["day_name"]
         d_date = bday["date"]
         
-        # 오픈 배정 (총합 기준 + 9~10월 과거 누적치 반영 정렬)
+        # [정렬 로직 개선] 
+        # 1순위: (이전 누적 + 당월 배정) 총합이 적은 사람 우선
+        # 2순위: 총합이 같다면, 이전 누적치(prev_total)가 적었던 사람을 우선하여 형평성 유지
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
         avail_open.sort(key=lambda x: (
             staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
-            staff_counts[x]["prev_total"],
-            staff_counts[x]["open"] + staff_counts[x]["close"]
+            staff_counts[x]["prev_total"]
         ))
         selected_open = avail_open[0] if avail_open else ""
         
@@ -167,8 +167,7 @@ if st.button("스케줄 생성하기"):
             other_avail = [s for s in avail_close if s != "김상혁"]
             other_avail.sort(key=lambda x: (
                 staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
-                staff_counts[x]["prev_total"],
-                staff_counts[x]["open"] + staff_counts[x]["close"]
+                staff_counts[x]["prev_total"]
             ))
             if other_avail:
                 selected_close = other_avail[0]
@@ -203,26 +202,18 @@ if "schedule_results" in st.session_state:
         m_close = data["close"]
         m_total = m_open + m_close
         
-        # [핵심 수정] 이전 달까지의 누적 총합(prev_total)에 당월 합계를 더해 진짜 총계 산출
         prev_total = data.get("prev_total", 0)
-        total_sum = prev_total + m_total
-        
-        # 오픈/마감 개별 총계도 필요에 맞게 대략 분배 혹은 총계 중심으로 표현
-        # (기존 구조 유지를 위해 총 오픈/총 마감에도 이전 누적치를 비례 또는 단순 합산 반영)
-        # 여기서는 직전 10월까지의 누적값에서 오픈/마감 세부치를 따로 들고 있지 않으므로 당월 오픈/마감에 직전 총계를 녹여냅니다.
-        # 정확한 관리를 위해 '총계' 컬럼에 (이전 달 누적 + 당월 합계)가 정확히 표기되도록 합니다.
+        total_sum = prev_total + m_total  # 누적횟수 (이전 누적 + 당월 합계)
         
         stats_rows.append({
             "이름": staff,
             "당월 오픈": m_open,
             "당월 마감": m_close,
             "당월 합계": m_total,
-            "총 오픈": "-",  # 월별 총계 관리이므로 세부 오픈/마감보다는 전체 누적 총계가 핵심
-            "총 마감": "-",
-            "총계": total_sum
+            "누적횟수": total_sum  # '총계' 대신 '누적횟수'로 변경 및 총 오픈/마감 컬럼 제거
         })
         
-        line_str = f"{staff} / 당월 오픈 {m_open} / 당월 마감 {m_close} / 당월 합계 {m_total} / 누적 총계 {total_sum}"
+        line_str = f"{staff} / 당월 오픈 {m_open} / 당월 마감 {m_close} / 당월 합계 {m_total} / 누적횟수 {total_sum}"
         copy_texts.append(line_str)
         
     stats_df = pd.DataFrame(stats_rows)
