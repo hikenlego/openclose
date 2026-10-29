@@ -29,7 +29,43 @@ try:
     plt.rcParams['axes.unicode_minus'] = False
 except ImportError:
     HAS_MATPLOTLIB = False
+def solve_quota_matching(slots, avail, quotas):
+    """슬롯을 인원별 정확 쿼터에 맞춰 배정 (증가 경로 방식).
+    slots : 시간순 슬롯 키 리스트
+    avail : {슬롯: [가용 인원]}
+    quotas: {인원: 맡아야 할 정확한 횟수}
+    반환  : (owner, fail) / 성공 시 fail=None
+    실패 시 fail = {"slot": 실패 슬롯, "visited": 병목 인원 집합, "stuck_slots": 병목 슬롯 리스트}
+    """
+    assigned = {s: [] for s in quotas}
+    owner = {}
 
+    def try_assign(slot, visited):
+        cands = [s for s in avail[slot] if s in quotas]
+        free = [s for s in cands if len(assigned[s]) < quotas[s]]
+        if free:
+            s = min(free, key=lambda x: len(assigned[x]))
+            assigned[s].append(slot)
+            owner[slot] = s
+            return True
+        for s in cands:
+            if s in visited:
+                continue
+            visited.add(s)
+            for other in list(assigned[s]):
+                if try_assign(other, visited):
+                    assigned[s].remove(other)
+                    assigned[s].append(slot)
+                    owner[slot] = s
+                    return True
+        return False
+
+    for slot in slots:
+        visited = set()
+        if not try_assign(slot, visited):
+            stuck = [slot] + [x for s in visited for x in assigned[s]]
+            return owner, {"slot": slot, "visited": visited, "stuck_slots": stuck}
+    return owner, None
 st.title("근무 일정 자동 생성 프로그램")
 
 if "schedule_df" not in st.session_state:
@@ -245,69 +281,113 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
         else:
             st.success("모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
 
-    if st.button("2단계: 최종 스케줄 생성하기"):
+     if st.button("2단계: 최종 스케줄 생성하기"):
         business_days = st.session_state.business_days
         staff_prev = st.session_state.staff_prev
-        
-        target_nov_quotas = {staff: user_final_cumulatives[staff] - staff_prev.get(staff, 0) for staff in staff_names}
-        
-        schedule_results = []
-        staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev.get(staff, 0)} for staff in staff_names}
-        
-        generation_failed = False
-        fail_reason = ""
-        fail_day_name = ""
-        
-        for bday in business_days:
-            d_name = bday["day_name"]
-            d_date = bday["date"]
-            
-            avail_open = open_input.get(d_name, [])
-            avail_open = [s for s in avail_open if s != "김상혁"]
-            
-            valid_open = [s for s in avail_open if (staff_counts[s]["open"] + staff_counts[s]["close"]) < target_nov_quotas.get(s, 0)]
-            
-            if not valid_open:
-                generation_failed = True
-                fail_day_name = d_name
-                fail_reason = f"날짜 {d_date}({d_name}요일) 오픈 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠습니다."
-                break
-                
-            valid_open.sort(key=lambda x: (staff_counts[x]["open"] + staff_counts[x]["close"]))
-            selected_open = valid_open[0]
-            
-            if selected_open:
-                staff_counts[selected_open]["open"] += 1
-                
-            avail_close = close_input.get(d_name, [])
-            if d_name in ["월", "수"] and "김상혁" in avail_close:
-                selected_close = "김상혁"
-            else:
-                other_avail = [s for s in avail_close if s != "김상혁"]
-                valid_close = [s for s in other_avail if (staff_counts[s]["open"] + staff_counts[s]["close"]) < target_nov_quotas.get(s, 0)]
-                
-                if not valid_close:
-                    generation_failed = True
-                    fail_day_name = d_name
-                    fail_reason = f"날짜 {d_date}({d_name}요일) 마감 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠습니다."
-                    break
-                    
-                valid_close.sort(key=lambda x: (staff_counts[x]["open"] + staff_counts[x]["close"]))
-                selected_close = valid_close[0]
-            
-            if selected_close:
-                staff_counts[selected_close]["close"] += 1
-                
-            schedule_results.append({
-                "날짜": d_date,
-                "일": bday["day_num"],
-                "요일": d_name,
-                "오픈": selected_open,
-                "마감": selected_close
-            })
-            
-        if generation_failed:
+
+        def clear_results():
             if "schedule_results" in st.session_state:
+                del st.session_state["schedule_results"]
+            if "staff_counts" in st.session_state:
+                del st.session_state["staff_counts"]
+
+        target_nov_quotas = {staff: user_final_cumulatives[staff] - staff_prev.get(staff, 0) for staff in staff_names}
+        quotas = {s: target_nov_quotas.get(s, 0) for s in general_staff}
+
+        # 슬롯 구성 (월/수 마감은 김상혁 고정이라 매칭 대상에서 제외)
+        slots, avail, slot_label, fixed_close = [], {}, {}, {}
+        for idx, bday in enumerate(business_days):
+            d_name, d_date = bday["day_name"], bday["date"]
+            day_label = f"{d_date.month}/{d_date.day}({d_name})"
+
+            so = (idx, "오픈")
+            slots.append(so)
+            avail[so] = [s for s in open_input.get(d_name, []) if s != "김상혁"]
+            slot_label[so] = f"{day_label} 오픈"
+
+            if d_name in ["월", "수"]:
+                fixed_close[idx] = "김상혁"
+            else:
+                sc = (idx, "마감")
+                slots.append(sc)
+                avail[sc] = [s for s in close_input.get(d_name, []) if s != "김상혁"]
+                slot_label[sc] = f"{day_label} 마감"
+
+        quota_sum = sum(quotas.values())
+        if quota_sum != len(slots):
+            clear_results()
+            st.error(
+                f"쿼터 총합 불일치: 일반 인원 쿼터 합 {quota_sum}회 / 배정할 슬롯 {len(slots)}개 "
+                f"(차이 {quota_sum - len(slots):+d}회). 슬라이더 합계를 슬롯 수에 맞춰주세요. "
+                f"(이전 결과물 초기화됨)"
+            )
+        else:
+            owner, fail = solve_quota_matching(slots, avail, quotas)
+
+            if fail is not None:
+                clear_results()
+                f_slot = fail["slot"]
+                f_label = slot_label[f_slot]
+                visited = fail["visited"]
+                stuck = fail["stuck_slots"]
+
+                if not avail[f_slot]:
+                    st.error(
+                        f"스케줄 생성 중단 및 오류 발생!\n"
+                        f"(이전에 생성되었던 결과물 및 통계는 모두 초기화되었습니다.)\n\n"
+                        f"상세 원인:\n{f_label} 슬롯에 가용 인원이 한 명도 입력되어 있지 않습니다.\n"
+                        f"해결 가이드: 위쪽 가용 인원 입력란에서 해당 요일/시간대에 인원을 추가하세요."
+                    )
+                else:
+                    need = len(stuck)
+                    cap = sum(quotas[s] for s in visited)
+                    increase_candidates = sorted(visited)
+                    decrease_candidates = [s for s in general_staff if s not in visited and quotas[s] > 0]
+                    stuck_str = ", ".join(slot_label[x] for x in stuck)
+
+                    st.error(
+                        f"스케줄 생성 중단 및 오류 발생!\n"
+                        f"(이전에 생성되었던 결과물 및 통계는 모두 초기화되었습니다.)\n\n"
+                        f"상세 원인:\n{f_label} 슬롯 배정 실패. 다른 날짜 슬롯을 재배치하는 모든 경우를 시도했지만, "
+                        f"현재 쿼터로는 해가 존재하지 않습니다.\n\n"
+                        f"병목 진단:\n"
+                        f"- 병목 슬롯 {need}개: {stuck_str}\n"
+                        f"- 이 슬롯들을 맡을 수 있는 인원: {', '.join(increase_candidates)} "
+                        f"(쿼터 합 {cap}회 < 필요 {need}회)\n\n"
+                        f"해결 가이드:\n"
+                        f"- [늘려야 할 추천 인원]: {', '.join(increase_candidates)} (합계 최소 +{need - cap}회)\n"
+                        f"- [줄여야 할 추천 인원(여유 인원)]: {', '.join(decrease_candidates) if decrease_candidates else '없음'}\n"
+                        f"- 총합을 유지하려면 늘린 만큼 여유 인원에서 줄이세요.\n"
+                        f"- 위쪽 1단계 버튼을 다시 누르면 성공하는 초기 모범 쿼터로 슬라이더가 초기화됩니다."
+                    )
+            else:
+                schedule_results = []
+                staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev.get(staff, 0)} for staff in staff_names}
+
+                for idx, bday in enumerate(business_days):
+                    selected_open = owner[(idx, "오픈")]
+                    selected_close = fixed_close.get(idx) or owner[(idx, "마감")]
+                    staff_counts[selected_open]["open"] += 1
+                    staff_counts[selected_close]["close"] += 1
+                    schedule_results.append({
+                        "날짜": bday["date"],
+                        "일": bday["day_num"],
+                        "요일": bday["day_name"],
+                        "오픈": selected_open,
+                        "마감": selected_close
+                    })
+
+                mismatch = any(
+                    staff_counts[s]["open"] + staff_counts[s]["close"] != t
+                    for s, t in target_nov_quotas.items()
+                )
+                if mismatch:
+                    clear_results()
+                    st.error("오류: 지정한 목표 쿼터와 실제 생성된 횟수 간에 불일치가 감지되었습니다. (이전 결과물 초기화됨)")
+                else:
+                    st.session_state.schedule_results = schedule_results
+                    st.session_state.staff_counts = staff_counts
+                    st.success("지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다!")
                 del st.session_state["schedule_results"]
             if "staff_counts" in st.session_state:
                 del st.session_state["staff_counts"]
