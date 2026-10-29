@@ -220,7 +220,8 @@ if "schedule_results" in st.session_state:
 
     st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
     
-    month_matrix = calendar.Calendar(firstweekday=6).monthcalendar(target_year, target_month)
+    calendar.setfirstweekday(calendar.SUNDAY)
+    month_matrix = calendar.monthcalendar(target_year, target_month)
     sched_dict = {item["일"]: {"오픈": item["오픈"], "마감": item["마감"]} for item in st.session_state.schedule_results}
     
     if HAS_MATPLOTLIB:
