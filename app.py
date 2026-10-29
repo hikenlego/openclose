@@ -145,7 +145,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
     # 일반 인원들이 나눠 가져야 할 총 오픈/마감 횟수 계산
     general_staff = [s for s in staff_names if s != "김상혁"]
     
-    st.info(f"📌 총 영업일수: {total_business_days일} (오픈 총 {total_business_days개}, 일반 마감 총 {total_business_days - sanghyuk_closes}개)")
+    st.info(f"📌 총 영업일수: {total_business_days}일 (오픈 총 {total_business_days}개, 일반 마감 총 {total_business_days - sanghyuk_closes}개)")
     
     user_final_cumulatives = {}
     
