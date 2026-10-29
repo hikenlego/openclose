@@ -195,12 +195,10 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
     total_general_close_slots = total_business_days - sanghyuk_closes
     required_nov = total_open_slots + total_general_close_slots
     
-    st.info(f"총 영업일수: {total_business_days}일 (오픈 총 {total_open_slots}개, 일반 마감 총 {total_general_close_slots}개 | **총 배정 필요 횟수: {required_nov}회**)")
+    st.info(f"총 영업일수: {total_business_days}일 (오픈 총 {total_open_slots}개, 일반 마감 총 {total_general_close_slots}개 | 총 배정 필요 횟수: {required_nov}회)")
     
     user_final_cumulatives = {}
-    
-    # 개선 포인트: 슬라이더 최대치를 모든 인원이 공통으로 넉넉하게 잡거나, 남은 슬롯 기반 최대치로 통일하여 상대적 위치 가시화
-    max_slider_limit = required_nov  # 전체 슬롯 수로 최대치 통일하여 상대적 바 길이(위치) 비교 극대화
+    max_slider_limit = required_nov
     
     if slider_mode == "최종 누적 횟수 기준":
         current_nov_sum = 0
@@ -212,20 +210,29 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             temp_vals[staff] = val
             current_nov_sum += (val - prev)
 
-        # 실시간 오차 가이드 제공
-        diff = current_nov_sum - required_nov
-        if diff != 0:
-            st.warning(f"⚠️ 현재 배정된 총 당월 횟수: **{current_nov_sum}회** (목표치인 {required_nov}회보다 **{abs(diff)}회 조절 필요**합니다. 누군가를 줄이면 다른 사람을 늘려 균형을 맞춰주세요!)")
-        else:
-            st.success("✨ 모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
-
         for s in general_staff:
             user_final_cumulatives[s] = temp_vals[s]
 
         sk_prev = st.session_state.staff_prev.get("김상혁", 0)
         sk_final = sk_prev + sanghyuk_closes
-        st.markdown(f"🔒 **김상혁 (월/수 마감 전담)**: 이전 누적 {sk_prev}회 + 당월 마감 {sanghyuk_closes}회 = **최종 누적 {sk_final}회** (자동 고정)")
+        st.markdown(f"김상혁 (월/수 마감 전담): 이전 누적 {sk_prev}회 + 당월 마감 {sanghyuk_closes}회 = 최종 누적 {sk_final}회 (자동 고정)")
         user_final_cumulatives["김상혁"] = sk_final
+
+        diff = current_nov_sum - required_nov
+        if diff < 0:
+            increase_candidates = general_staff
+            st.warning(
+                f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회보다 {abs(diff)}회 부족합니다.)\n\n"
+                f"목표를 늘릴 수 있는 추천 인원: {', '.join(increase_candidates)}"
+            )
+        elif diff > 0:
+            decrease_candidates = [s for s in general_staff if (user_final_cumulatives[s] - st.session_state.staff_prev.get(s, 0)) > 1]
+            st.warning(
+                f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회보다 {diff}회 초과되었습니다.)\n\n"
+                f"목표를 줄일 수 있는 추천 인원: {', '.join(decrease_candidates)}"
+            )
+        else:
+            st.success("모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
 
     else:  # 당월 총 횟수 기준
         current_nov_sum = 0
@@ -238,15 +245,25 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             current_nov_sum += val
             user_final_cumulatives[staff] = prev + val
 
-        diff = current_nov_sum - required_nov
-        if diff != 0:
-            st.warning(f"⚠️ 현재 배정된 총 당월 횟수: **{current_nov_sum}회** (목표치인 {required_nov}회보다 **{abs(diff)}회 조절 필요**합니다. 누군가를 줄이면 다른 사람을 늘려 균형을 맞춰주세요!)")
-        else:
-            st.success("✨ 모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
-
         sk_prev = st.session_state.staff_prev.get("김상혁", 0)
         user_final_cumulatives["김상혁"] = sk_prev + sanghyuk_closes
-        st.markdown(f"🔒 **김상혁 (월/수 마감 전담)**: 당월 마감 {sanghyuk_closes}회 (자동 고정)")
+        st.markdown(f"김상혁 (월/수 마감 전담): 당월 마감 {sanghyuk_closes}회 (자동 고정)")
+
+        diff = current_nov_sum - required_nov
+        if diff < 0:
+            increase_candidates = general_staff
+            st.warning(
+                f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회보다 {abs(diff)}회 부족합니다.)\n\n"
+                f"목표를 늘릴 수 있는 추천 인원: {', '.join(increase_candidates)}"
+            )
+        elif diff > 0:
+            decrease_candidates = [s for s in general_staff if target_nov_quotas_temp[s] > 1]
+            st.warning(
+                f"현재 배정된 총 당월 횟수: {current_nov_sum}회 (목표치인 {required_nov}회보다 {diff}회 초과되었습니다.)\n\n"
+                f"목표를 줄일 수 있는 추천 인원: {', '.join(decrease_candidates)}"
+            )
+        else:
+            st.success("모든 인원의 당월 총합이 배치해야 할 슬롯 수와 완벽하게 일치합니다!")
 
     if st.button("2단계: 최종 스케줄 생성하기"):
         business_days = st.session_state.business_days
@@ -333,19 +350,19 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             if suggestion_staff_list and reducible_staff_list:
                 suggestion_str = (
                     f"제언: 현재 {fail_day_name}요일 마감에 투입 가능한 모든 인원이 쿼터를 다 채웠습니다.\n"
-                    f"- **[늘려야 할 후보 인원]** (아래 중 택 1하여 목표를 늘려주세요):\n  {', '.join([f'**{s}**' for s in suggestion_staff_list])}\n"
-                    f"- **[줄여야 할 후보 인원]** (총합 유지를 위해 아래 중 택 1하여 목표를 줄여주세요):\n  {', '.join([f'**{s}**' for s in reducible_staff_list])}\n\n"
-                    f"💡 **막막하실 때의 팁:** 위쪽 **[1단계]** 버튼을 다시 누르시면 언제든 완벽하게 성공하는 초기 모범 스케줄 상태로 슬라이더가 확실하게 초기화됩니다!"
+                    f"- 늘려야 할 후보 인원 (아래 중 택 1하여 목표를 늘려주세요):\n  {', '.join([s for s in suggestion_staff_list])}\n"
+                    f"- 줄여야 할 후보 인원 (총합 유지를 위해 아래 중 택 1하여 목표를 줄여주세요):\n  {', '.join([s for s in reducible_staff_list])}\n\n"
+                    f"팁: 위쪽 1단계 버튼을 다시 누르시면 언제든 완벽하게 성공하는 초기 모범 스케줄 상태로 슬라이더가 확실하게 초기화됩니다!"
                 )
             else:
                 suggestion_str = "제언: 슬라이더에서 전체 인원의 누적 횟수 목표를 재조정하여 요일별 가용 인원과 쿼터 균형을 맞춰주세요."
 
             st.error(
-                f"❌ 스케줄 생성 중단 및 오류 발생!\n"
+                f"스케줄 생성 중단 및 오류 발생!\n"
                 f"(이전에 생성되었던 결과물 및 통계는 모두 초기화되었습니다.)\n\n"
-                f"**상세 원인:**\n{fail_reason}\n\n"
-                f"🔍 **[참고] {fail_day_name}요일 마감 가용 인원들의 현재 쿼터 현황:**\n{status_str}\n\n"
-                f"💡 **해결 가이드:**\n{suggestion_str}"
+                f"상세 원인:\n{fail_reason}\n\n"
+                f"[참고] {fail_day_name}요일 마감 가용 인원들의 현재 쿼터 현황:\n{status_str}\n\n"
+                f"해결 가이드:\n{suggestion_str}"
             )
         else:
             mismatch = False
@@ -358,15 +375,13 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
             if mismatch:
                 if "schedule_results" in st.session_state:
                     del st.session_state["schedule_results"]
-                if "schedule_results" in st.session_state:
-                    del st.session_state["schedule_results"]
                 if "staff_counts" in st.session_state:
                     del st.session_state["staff_counts"]
-                st.error("❌ 오류: 지정한 목표 쿼터와 실제 생성된 횟수 간에 불일치가 감지되었습니다. (이전 결과물 초기화됨)")
+                st.error("오류: 지정한 목표 쿼터와 실제 생성된 횟수 간에 불일치가 감지되었습니다. (이전 결과물 초기화됨)")
             else:
                 st.session_state.schedule_results = schedule_results
                 st.session_state.staff_counts = staff_counts
-                st.success("✨ 지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다!")
+                st.success("지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다!")
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
