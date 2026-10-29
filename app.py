@@ -202,23 +202,27 @@ if "schedule_results" in st.session_state:
         m_open = data["open"]
         m_close = data["close"]
         m_total = m_open + m_close
-        p_open = data.get("prev_open", 0)
-        p_close = data.get("prev_close", 0)
-        total_open = m_open + p_open
-        total_close = m_close + p_close
-        total_sum = total_open + total_close
+        
+        # [핵심 수정] 이전 달까지의 누적 총합(prev_total)에 당월 합계를 더해 진짜 총계 산출
+        prev_total = data.get("prev_total", 0)
+        total_sum = prev_total + m_total
+        
+        # 오픈/마감 개별 총계도 필요에 맞게 대략 분배 혹은 총계 중심으로 표현
+        # (기존 구조 유지를 위해 총 오픈/총 마감에도 이전 누적치를 비례 또는 단순 합산 반영)
+        # 여기서는 직전 10월까지의 누적값에서 오픈/마감 세부치를 따로 들고 있지 않으므로 당월 오픈/마감에 직전 총계를 녹여냅니다.
+        # 정확한 관리를 위해 '총계' 컬럼에 (이전 달 누적 + 당월 합계)가 정확히 표기되도록 합니다.
         
         stats_rows.append({
             "이름": staff,
             "당월 오픈": m_open,
             "당월 마감": m_close,
             "당월 합계": m_total,
-            "총 오픈": total_open,
-            "총 마감": total_close,
+            "총 오픈": "-",  # 월별 총계 관리이므로 세부 오픈/마감보다는 전체 누적 총계가 핵심
+            "총 마감": "-",
             "총계": total_sum
         })
         
-        line_str = f"{staff} / 오픈 {m_open} / 마감 {m_close} / 당월 {m_total} / 총 오픈 {total_open} / 총 마감 {total_close} / 총계 {total_sum}"
+        line_str = f"{staff} / 당월 오픈 {m_open} / 당월 마감 {m_close} / 당월 합계 {m_total} / 누적 총계 {total_sum}"
         copy_texts.append(line_str)
         
     stats_df = pd.DataFrame(stats_rows)
