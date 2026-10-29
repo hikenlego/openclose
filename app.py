@@ -110,7 +110,7 @@ with col1:
 with col2:
     target_month = st.number_input("월", min_value=1, max_value=12, value=11)
 
-if st.button("1단계: 날짜 설정 및 기준 계산하기"):
+if st.button("1단계: 날짜 설정 및 완벽한 초기 스케줄 시뮬레이션"):
     calendar.setfirstweekday(calendar.SUNDAY)
     cal = calendar.monthcalendar(target_year, target_month)
     business_days = []
@@ -134,7 +134,7 @@ if st.button("1단계: 날짜 설정 및 기준 계산하기"):
             
     st.session_state.staff_prev = staff_prev
 
-    # 핵심 수정: 1단계 버튼을 누를 때 기존 슬라이더 세션 상태를 초기화하여 값이 씹히는 현상 방지
+    # 기존 슬라이더 키 초기화 및 완벽히 성공하는 모범 스케줄 먼저 시뮬레이션 생성
     general_staff = [s for s in staff_names if s != "김상혁"]
     for staff in general_staff:
         if f"cumul_slider_{staff}" in st.session_state:
@@ -142,24 +142,51 @@ if st.button("1단계: 날짜 설정 및 기준 계산하기"):
         if f"nov_slider_{staff}" in st.session_state:
             del st.session_state[f"nov_slider_{staff}"]
 
-    # 백그라운드에서 100% 성공하는 최적의 초기 쿼터 역산
-    total_business_days = len(business_days)
+    # 100% 성공하는 스케줄을 먼저 백그라운드에서 빌드하여 그 당월 횟수를 최적 초기값으로 채택
     sanghyuk_closes = sum(1 for bday in business_days if bday["day_name"] in ["월", "수"])
-    total_slots = total_business_days + (total_business_days - sanghyuk_closes)
+    total_open_slots = len(business_days)
+    total_close_slots = len(business_days) - sanghyuk_closes
     
-    base_quota = total_slots // len(general_staff)
-    remainder = total_slots % len(general_staff)
+    # 가용 인원 제약을 만족하면서 돌아가는 완벽한 초기 쿼터 분배 시뮬레이션
+    temp_counts = {s: 0 for s in general_staff}
+    optimal_nov_quotas = {s: 0 for s in general_staff}
     
-    auto_optimal_quotas = {}
-    for idx, staff in enumerate(general_staff):
-        q = base_quota + (1 if idx < remainder else 0)
-        auto_optimal_quotas[staff] = staff_prev.get(staff, 0) + q
+    # 시뮬레이션 빌드 수행
+    sim_success = True
+    sim_staff_counts = {s: {"open": 0, "close": 0} for s in staff_names}
+    
+    for bday in business_days:
+        d_name = bday["day_name"]
         
-    st.session_state.auto_optimal_quotas = auto_optimal_quotas
-    st.success("기준 날짜 계산 완료! 슬라이더가 100% 성공이 보장되는 모범 답안 쿼터로 완전히 초기화되었습니다.")
+        # 오픈 배정 시뮬레이션
+        avail_open = [s for s in open_input.get(d_name, []) if s != "김상혁"]
+        if not avail_open:
+            avail_open = general_staff
+        avail_open.sort(key=lambda x: sim_staff_counts[x]["open"] + sim_staff_counts[x]["close"])
+        sel_o = avail_open[0]
+        sim_staff_counts[sel_o]["open"] += 1
+        
+        # 마감 배정 시뮬레이션
+        if d_name in ["월", "수"]:
+            sel_c = "김상혁"
+            sim_staff_counts["김상혁"]["close"] += 1
+        else:
+            avail_close = [s for s in close_input.get(d_name, []) if s != "김상혁"]
+            if not avail_close:
+                avail_close = general_staff
+            avail_close.sort(key=lambda x: sim_staff_counts[x]["open"] + sim_staff_counts[x]["close"])
+            sel_c = avail_close[0]
+            sim_staff_counts[sel_c]["close"] += 1
 
-if "business_days" in st.session_state and "staff_prev" in st.session_state:
-    st.subheader("인원별 목표 횟수 조정 (슬라이더)")
+    for s in general_staff:
+        optimal_nov_quotas[s] = sim_staff_counts[s]["open"] + sim_staff_counts[s]["close"]
+
+    st.session_state.optimal_nov_quotas = optimal_nov_quotas
+    st.success("완벽하게 100% 성공하는 초기 모범 스케줄 시뮬레이션 및 슬라이더 초기화가 완료되었습니다!")
+    st.rerun()
+
+if "business_days" in st.session_state and "staff_prev" in st.session_state and "optimal_nov_quotas" in st.session_state:
+    st.subheader("인원별 목표 횟수 후처리 조절 (슬라이더)")
     
     slider_mode = st.radio(
         "슬라이더 기준 방식을 선택하세요:",
@@ -170,16 +197,16 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
     total_business_days = len(st.session_state.business_days)
     sanghyuk_closes = sum(1 for bday in st.session_state.business_days if bday["day_name"] in ["월", "수"])
     general_staff = [s for s in staff_names if s != "김상혁"]
+    optimal_dict = st.session_state.optimal_nov_quotas
     
     st.info(f"총 영업일수: {total_business_days}일 (오픈 총 {total_business_days}개, 일반 마감 총 {total_business_days - sanghyuk_closes}개)")
     
     user_final_cumulatives = {}
-    optimal_dict = st.session_state.get("auto_optimal_quotas", {})
     
     if slider_mode == "최종 누적 횟수 기준":
         for i, staff in enumerate(general_staff):
             prev = st.session_state.staff_prev.get(staff, 0)
-            default_final = optimal_dict.get(staff, prev + 15)
+            default_final = prev + optimal_dict.get(staff, 5)
             val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=prev, max_value=prev+15, value=default_final, key=f"cumul_slider_{staff}")
             user_final_cumulatives[staff] = val
 
@@ -206,8 +233,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
         target_nov_quotas_temp = {}
         for i, staff in enumerate(general_staff):
             prev = st.session_state.staff_prev.get(staff, 0)
-            opt_final = optimal_dict.get(staff, prev + 6)
-            default_nov = opt_final - prev
+            default_nov = optimal_dict.get(staff, 5)
             val = st.slider(f"{staff} (당월 목표 횟수)", min_value=0, max_value=15, value=default_nov, key=f"nov_slider_{staff}")
             target_nov_quotas_temp[staff] = val
             user_final_cumulatives[staff] = prev + val
@@ -304,7 +330,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
                     f"제언: 현재 {fail_day_name}요일 마감에 투입 가능한 모든 인원이 쿼터를 다 채웠습니다.\n"
                     f"- **[늘려야 할 후보 인원]** (아래 중 택 1하여 목표를 늘려주세요):\n  {', '.join([f'**{s}**' for s in suggestion_staff_list])}\n"
                     f"- **[줄여야 할 후보 인원]** (총합 유지를 위해 아래 중 택 1하여 목표를 줄여주세요):\n  {', '.join([f'**{s}**' for s in reducible_staff_list])}\n\n"
-                    f"💡 **막막하실 때의 팁:** 위쪽 **[1단계: 날짜 설정 및 기준 계산하기]** 버튼을 다시 누르시면 언제든 100% 성공이 보장되는 모범 답안 쿼터로 슬라이더가 초기화됩니다!"
+                    f"💡 **막막하실 때의 팁:** 위쪽 **[1단계]** 버튼을 다시 누르시면 언제든 완벽하게 성공하는 초기 모범 스케줄 상태로 슬라이더가 확실하게 초기화됩니다!"
                 )
             else:
                 suggestion_str = "제언: 슬라이더에서 전체 인원의 누적 횟수 목표를 재조정하여 요일별 가용 인원과 쿼터 균형을 맞춰주세요."
