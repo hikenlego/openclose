@@ -208,14 +208,13 @@ if st.button("스케줄 생성하기"):
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
-    stats_rows = []
-    copy_texts = []
+    st.info("💡 아래 '누적횟수' 또는 '당월 합계' 등의 값을 직접 수정(더블클릭)하면, 복사 양식과 캘린더 내용이 실시간으로 연동되어 반영됩니다!")
     
+    stats_rows = []
     for staff, data in st.session_state.staff_counts.items():
         m_open = data["open"]
         m_close = data["close"]
         m_total = m_open + m_close
-        
         prev_total = data.get("prev_total", 0)
         total_sum = prev_total + m_total 
         
@@ -227,15 +226,25 @@ if "schedule_results" in st.session_state:
             "누적횟수": total_sum
         })
         
-        line_str = f"{staff} / 당월 오픈 {m_open} / 당월 마감 {m_close} / 당월 합계 {m_total} / 누적횟수 {total_sum}"
+    stats_df = pd.DataFrame(stats_rows)
+    stats_df.set_index("이름", inplace=True)
+    
+    # 수정 가능한 데이터 에디터로 변경하여 실시간 입력 반영
+    edited_stats = st.data_editor(stats_df, key="stats_editor")
+    
+    # 수정된 통계 값을 바탕으로 복사 텍스트 양식 실시간 생성
+    copy_texts = []
+    for staff, row in edited_stats.iterrows():
+        o = row["당월 오픈"]
+        c = row["당월 마감"]
+        t = row["당월 합계"]
+        tot = row["누적횟수"]
+        line_str = f"{staff} / 당월 오픈 {o} / 당월 마감 {c} / 당월 합계 {t} / 누적횟수 {tot}"
         copy_texts.append(line_str)
         
-    stats_df = pd.DataFrame(stats_rows)
-    st.dataframe(stats_df)
-    
-    st.subheader("복사 텍스트 양식")
+    st.subheader("복사 텍스트 양식 (실시간 연동)")
     full_copy_text = "\n".join(copy_texts)
-    st.text_area("아래 내용을 복사하여 사용하세요", value=full_copy_text, height=150)
+    st.text_area("아래 내용을 복사하여 사용하세요", value=full_copy_text, height=150, key="copy_area")
 
     st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
     
