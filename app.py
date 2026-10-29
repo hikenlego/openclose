@@ -134,8 +134,15 @@ if st.button("1단계: 날짜 설정 및 기준 계산하기"):
             
     st.session_state.staff_prev = staff_prev
 
-    # 백그라운드(보이지 않는 곳)에서 100% 성공하는 최적의 초기 쿼터를 역산하여 자동 시뮬레이션
+    # 핵심 수정: 1단계 버튼을 누를 때 기존 슬라이더 세션 상태를 초기화하여 값이 씹히는 현상 방지
     general_staff = [s for s in staff_names if s != "김상혁"]
+    for staff in general_staff:
+        if f"cumul_slider_{staff}" in st.session_state:
+            del st.session_state[f"cumul_slider_{staff}"]
+        if f"nov_slider_{staff}" in st.session_state:
+            del st.session_state[f"nov_slider_{staff}"]
+
+    # 백그라운드에서 100% 성공하는 최적의 초기 쿼터 역산
     total_business_days = len(business_days)
     sanghyuk_closes = sum(1 for bday in business_days if bday["day_name"] in ["월", "수"])
     total_slots = total_business_days + (total_business_days - sanghyuk_closes)
@@ -149,7 +156,7 @@ if st.button("1단계: 날짜 설정 및 기준 계산하기"):
         auto_optimal_quotas[staff] = staff_prev.get(staff, 0) + q
         
     st.session_state.auto_optimal_quotas = auto_optimal_quotas
-    st.success("기준 날짜 계산 완료! 100% 성공이 보장되는 모범 답안 쿼터로 슬라이더가 초기화되었습니다.")
+    st.success("기준 날짜 계산 완료! 슬라이더가 100% 성공이 보장되는 모범 답안 쿼터로 완전히 초기화되었습니다.")
 
 if "business_days" in st.session_state and "staff_prev" in st.session_state:
     st.subheader("인원별 목표 횟수 조정 (슬라이더)")
