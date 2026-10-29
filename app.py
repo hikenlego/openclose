@@ -506,6 +506,100 @@ def get_holiday_map(year, extra_text=""):
     return result
 
 
+APP_VERSION = "2026.10.30-r1"  # 배정 알고리즘을 바꾸면 이 값을 올려주세요 (이미지 하단에 표시됨)
+FOOTER_COLS = [0.1, 1.9, 3.5, 5.1, 6.7, 8.3]
+
+
+def quick_check(results, open_input, close_input, rules, staff_counts, quotas):
+    """생성 직후 검증 요약 (가용 인원, 쿼터, 조건 위반 건수)"""
+    avail_bad = []
+    for r in results:
+        d = r["요일"]
+        tag = f"{r['날짜'].month}/{r['날짜'].day}"
+        if r["오픈"] not in open_input.get(d, []):
+            avail_bad.append(f"{tag} 오픈 {r['오픈']}")
+        if d in ["월", "수"]:
+            if r["마감"] != "김상혁":
+                avail_bad.append(f"{tag} 마감 {r['마감']}")
+        elif r["마감"] not in close_input.get(d, []):
+            avail_bad.append(f"{tag} 마감 {r['마감']}")
+    quota_bad = [p for p, q in quotas.items() if staff_counts[p]["open"] + staff_counts[p]["close"] != q]
+    viol = {"close_open": 0, "same_day": 0, "consec_open": 0}
+    for i, r in enumerate(results):
+        if r["오픈"] == r["마감"]:
+            viol["same_day"] += 1
+        if i + 1 < len(results) and (results[i + 1]["날짜"] - r["날짜"]).days == 1:
+            nx = results[i + 1]
+            if r["마감"] == nx["오픈"]:
+                viol["close_open"] += 1
+            if r["오픈"] == nx["오픈"]:
+                viol["consec_open"] += 1
+    applied_viol = {k: v for k, v in viol.items() if rules.get(k) and v}
+    return {"avail_bad": avail_bad, "quota_bad": quota_bad, "viol": viol, "applied_viol": applied_viol}
+
+
+def build_footer_lines(gen, staff_counts):
+    """이미지 하단에 넣을 생성 조건 문구. 반환: [(종류, 내용)] 종류 = h(제목) / t(문장) / rowh(표 머리) / row(표 행)"""
+    import textwrap
+
+    def wrap(text, width=88):
+        return textwrap.wrap(text, width=width, subsequent_indent="   ") or [text]
+
+    names = gen["rule_names"]
+    lines = [("h", "생성 조건 (이 결과를 다시 만들거나 검증할 때의 기준)")]
+    lines += [("t", t) for t in wrap(f"생성 일시 {gen['ts']} (KST) / 대상 {gen['year']}년 {gen['month']}월 / 프로그램 버전 {APP_VERSION}")]
+    lines += [("t", t) for t in wrap("방식: 개인별 당월 쿼터를 정확히 맞추고 요일별 가용 인원 범위 안에서 배정 (월·수 마감은 김상혁 고정)")]
+
+    on = [names[k] for k, v in gen["rules"].items() if v]
+    off = [names[k] for k, v in gen["rules"].items() if not v]
+    lines.append(("h", "배정 조건"))
+    lines += [("t", t) for t in wrap("적용: " + (", ".join(on) if on else "없음"))]
+    lines += [("t", t) for t in wrap("해제: " + (", ".join(off) if off else "없음"))]
+    if gen["rules"].get("weekly") or gen["rules"].get("balance"):
+        if gen["slack"] is None:
+            lines.append(("t", "주별·오픈/마감 균등 상한: 해가 없어 완화되어 미적용"))
+        else:
+            lines.append(("t", f"주별·오픈/마감 균등 상한: 기준 비율 +{gen['slack']}회 이내로 충족"))
+
+    lines.append(("h", "요일별 가용 인원 입력"))
+    for label, key in [("오픈", "open_input"), ("마감", "close_input")]:
+        txt = f"{label}: " + " / ".join(f"{d} {'·'.join(gen[key].get(d, [])) or '없음'}" for d in ["월", "화", "수", "목", "금"])
+        lines += [("t", t) for t in wrap(txt)]
+
+    lines.append(("h", "개인별 근무 횟수"))
+    lines.append(("rowh", ["이름", "이전 누적", "당월 오픈", "당월 마감", "당월 합계", "최종 누적"]))
+    for name in sorted(staff_counts):
+        d = staff_counts[name]
+        total = d["open"] + d["close"]
+        lines.append(("row", [name, str(d["prev_total"]), str(d["open"]), str(d["close"]), str(total), str(d["prev_total"] + total)]))
+
+    lines.append(("h", "공휴일 설정"))
+    if not gen["exclude_holidays"]:
+        hol_txt = "공휴일 제외: 사용 안 함"
+    elif gen["holidays"]:
+        hol_txt = "근무에서 제외한 공휴일: " + ", ".join(gen["holidays"])
+    else:
+        hol_txt = "공휴일 제외: 사용 (해당 월에 제외된 날 없음)"
+    lines += [("t", t) for t in wrap(hol_txt)]
+    extra = "; ".join(x.strip() for x in (gen["holiday_extra"] or "").splitlines() if x.strip())
+    if extra:
+        lines += [("t", t) for t in wrap("직접 입력한 휴무일 설정: " + extra)]
+
+    chk = gen["check"]
+    lines.append(("h", "생성 직후 검증 결과"))
+    lines.append(("t", "가용 인원 일치: " + ("통과" if not chk["avail_bad"] else "불일치 " + ", ".join(chk["avail_bad"][:5]))))
+    lines.append(("t", "개인별 쿼터 일치: " + ("통과" if not chk["quota_bad"] else "불일치 " + ", ".join(chk["quota_bad"]))))
+    if chk["applied_viol"]:
+        lines += [("t", t) for t in wrap("적용 조건 위반: " + ", ".join(f"{names[k]} {v}건" for k, v in chk["applied_viol"].items()))]
+    else:
+        lines.append(("t", "적용 조건 위반: 0건 (통과)"))
+    released = [f"{names[k]} {v}건" for k, v in chk["viol"].items() if not gen["rules"].get(k) and v]
+    if released:
+        lines += [("t", t) for t in wrap("해제한 조건에서 발생한 건수(참고): " + ", ".join(released))]
+    lines += [("t", t) for t in wrap("※ 같은 설정(가용 인원, 쿼터, 조건, 공휴일, 프로그램 버전)으로 다시 실행하면 동일한 결과가 만들어집니다.")]
+    return lines
+
+
 st.title("근무 일정 자동 생성 프로그램")
 
 if "schedule_df" not in st.session_state:
@@ -889,6 +983,18 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                     st.session_state.week_caps = week_caps
                     st.session_state.ratio_caps = ratio_caps
                     st.session_state.gen_quotas = dict(quotas)
+                    _hm = get_holiday_map(target_year, holiday_extra)
+                    st.session_state.gen_settings = {
+                        "ts": datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M"),
+                        "year": target_year, "month": target_month,
+                        "rules": dict(rules), "rule_names": dict(rule_names), "slack": week_slack,
+                        "open_input": {k: list(v) for k, v in open_input.items()},
+                        "close_input": {k: list(v) for k, v in close_input.items()},
+                        "holiday_extra": holiday_extra, "exclude_holidays": exclude_holidays,
+                        "holidays": [f"{d.month}/{d.day}({n})" for d, n in sorted(_hm.items())
+                                     if d.year == target_year and d.month == target_month and d.weekday() < 5],
+                        "check": quick_check(schedule_results, open_input, close_input, rules, staff_counts, quotas),
+                    }
                     if rules["weekly"] or rules["balance"]:
                         if week_slack is None:
                             week_note = " (주별 상한·오픈/마감 균등 상한은 모두 완화되어 적용되지 못했습니다)"
@@ -899,6 +1005,14 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state and 
                     st.success("지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다!" + week_note)
 
 if "schedule_results" in st.session_state:
+    gen = st.session_state.get("gen_settings")
+    if gen:
+        target_year, target_month = gen["year"], gen["month"]
+        open_input, close_input = gen["open_input"], gen["close_input"]
+        h_extra, h_excl = gen["holiday_extra"], gen["exclude_holidays"]
+    else:
+        h_extra, h_excl = st.session_state.get("holiday_extra", ""), st.session_state.get("exclude_holidays", True)
+
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
 
     stats_rows = []
@@ -962,7 +1076,9 @@ if "schedule_results" in st.session_state:
         RED, BLUE, GRID = "#d93025", "#3f51d9", "#d4d4d4"
         n_rows = len(month_matrix)
         fig_w, title_h, head_h, row_h = 10.0, 0.55, 0.45, 1.35
-        fig_h = title_h + head_h + n_rows * row_h
+        footer = build_footer_lines(gen, st.session_state.staff_counts) if gen else []
+        footer_h = (0.25 + sum(0.36 if k == "h" else 0.23 for k, _ in footer)) if footer else 0.0
+        fig_h = title_h + head_h + n_rows * row_h + footer_h
         cw = fig_w / 7
 
         fig = plt.figure(figsize=(fig_w, fig_h), facecolor="white")
@@ -983,9 +1099,9 @@ if "schedule_results" in st.session_state:
         for y in [head_top, head_bottom] + [head_bottom - (r + 1) * row_h for r in range(n_rows)]:
             ax.plot([0, fig_w], [y, y], color=GRID, lw=1.0, solid_capstyle="butt")
         for k in range(8):
-            ax.plot([k * cw, k * cw], [0, head_top], color=GRID, lw=1.0, solid_capstyle="butt")
+            ax.plot([k * cw, k * cw], [footer_h, head_top], color=GRID, lw=1.0, solid_capstyle="butt")
 
-        holiday_map = get_holiday_map(target_year, st.session_state.get("holiday_extra", ""))
+        holiday_map = get_holiday_map(target_year, h_extra)
 
         for r, row in enumerate(month_matrix):
             y_top = head_bottom - r * row_h
@@ -1003,6 +1119,21 @@ if "schedule_results" in st.session_state:
                 if hol_name:
                     ax.text(x0 + 0.1, y_top - row_h * (0.66 if mt else 0.46), f"({hol_name})",
                             ha="left", va="center", fontsize=12, color=RED)
+
+        if footer:
+            cursor = footer_h - 0.1
+            for kind, payload in footer:
+                if kind == "h":
+                    ax.text(0.1, cursor - 0.12, payload, ha="left", va="top", fontsize=11.5, fontweight="bold", color="#111111")
+                    cursor -= 0.36
+                elif kind == "t":
+                    ax.text(0.1, cursor, payload, ha="left", va="top", fontsize=10, color="#333333")
+                    cursor -= 0.23
+                else:
+                    for xi, cell in zip(FOOTER_COLS, payload):
+                        ax.text(xi, cursor, cell, ha="left", va="top", fontsize=10, color="#333333",
+                                fontweight="bold" if kind == "rowh" else "normal")
+                    cursor -= 0.23
 
         buf = io.BytesIO()
         fig.savefig(buf, format="png", dpi=150, bbox_inches="tight", pad_inches=0.08, facecolor="white")
@@ -1173,10 +1304,10 @@ if "schedule_results" in st.session_state:
     else:
         summary.append(("오픈·마감 비중 균등 (해제됨, 참고)", True, "한쪽만 근무한 인원 없음" if not one_sided else "한쪽만 근무: " + "; ".join(one_sided)))
 
-    hol_v = get_holiday_map(target_year, st.session_state.get("holiday_extra", ""))
+    hol_v = get_holiday_map(target_year, h_extra)
     hol_sched = [f"{target_month}/{d}({hol_v[datetime.date(target_year, target_month, d)]})" for d in sorted(parsed)
                  if datetime.date(target_year, target_month, d) in hol_v]
-    if st.session_state.get("exclude_holidays", True):
+    if h_excl:
         summary.append(("공휴일·대체공휴일 근무 배정 없음 (적용 중)", not hol_sched, "배정 없음" if not hol_sched else "; ".join(hol_sched)))
     else:
         summary.append(("공휴일 근무 배정 (제외 해제됨, 참고)", True, "해당 없음" if not hol_sched else "배정됨: " + "; ".join(hol_sched)))
