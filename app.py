@@ -141,56 +141,48 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
     total_business_days = len(st.session_state.business_days)
     sanghyuk_closes = sum(1 for bday in st.session_state.business_days if bday["day_name"] in ["월", "수"])
     
-    # 총 오픈 슬롯 수 = 총 영업일수, 총 마감 슬롯 수 = 총 영업일수
-    # 일반 인원들이 나눠 가져야 할 총 오픈/마감 횟수 계산
     general_staff = [s for s in staff_names if s != "김상혁"]
     
     st.info(f"📌 총 영업일수: {total_business_days}일 (오픈 총 {total_business_days}개, 일반 마감 총 {total_business_days - sanghyuk_closes}개)")
     
     user_final_cumulatives = {}
     
-    # 슬라이더 값 입력받기 (최종 누적 횟수 기준: 이전 누적 + 당월 근무)
     current_slider_sum = 0
     for i, staff in enumerate(general_staff):
         prev = st.session_state.staff_prev.get(staff, 0)
-        # 기본 권장 최종 누적값 (이현준/박라영은 15, 나머지는 16)
         default_final = 15 if staff in ["이현준", "박라영"] else 16
         
-        # 슬라이더 범위: 이전 누적치 이상부터 적절한 최대치까지 설정
         val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=prev, max_value=prev+15, value=default_final, key=f"cumul_slider_{staff}")
         user_final_cumulatives[staff] = val
         current_slider_sum += (val - prev)
 
-    # 김상혁 씨 정보 표시
     sk_prev = st.session_state.staff_prev.get("김상혁", 0)
     sk_final = sk_prev + sanghyuk_closes
     st.markdown(f"🔒 **김상혁 (월/수 마감 전담)**: 이전 누적 {sk_prev}회 + 당월 마감 {sanghyuk_closes}회 = **최종 누적 {sk_final}회** (자동 고정)")
     user_final_cumulatives["김상혁"] = sk_final
 
-    # 총 오픈/마감 슬롯과 슬라이더로 배정된 횟수 검증
     total_open_slots = total_business_days
     total_general_close_slots = total_business_days - sanghyuk_closes
-    
     total_assigned_nov = sum(user_final_cumulatives[s] - st.session_state.staff_prev.get(s, 0) for s in general_staff)
-    required_nov = total_open_slots + total_general_close_slots # 오픈 총개 + 일반마감 총개
+    required_nov = total_open_slots + total_general_close_slots
 
     if total_assigned_nov != required_nov:
         st.warning(f"⚠️ 현재 슬라이더로 설정된 일반 인원 총 당월 근무 횟수({total_assigned_nov}회)가 배치해야 할 총 슬롯 수({required_nov}회)와 일치하지 않습니다. (오차: {total_assigned_nov - required_nov}회). 슬라이더 조정을 통해 합계를 맞춰주세요!")
     else:
         st.success("✨ 일반 인원 총 당월 근무 횟수가 완벽하게 일치합니다!")
 
-if st.button("2단계: 최종 스케줄 생성하기"):
+    if st.button("2단계: 최종 스케줄 생성하기"):
         business_days = st.session_state.business_days
         staff_prev = st.session_state.staff_prev
         
-        # 1단계: 슬라이더로 지정한 최종 누적 횟수로부터 '개인별 당월 목표 횟수'를 정확하게 도출
         target_nov_quotas = {staff: user_final_cumulatives[staff] - staff_prev.get(staff, 0) for staff in staff_names}
         
-        # 날짜별 초기화
         schedule_results = []
         staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev.get(staff, 0)} for staff in staff_names}
         
-        # 날짜 순회하며 배정
+        generation_failed = False
+        fail_reason = ""
+        
         for bday in business_days:
             d_name = bday["day_name"]
             d_date = bday["date"]
@@ -199,16 +191,18 @@ if st.button("2단계: 최종 스케줄 생성하기"):
             avail_open = open_input.get(d_name, [])
             avail_open = [s for s in avail_open if s != "김상혁"]
             
-            # 아직 당월 목표 횟수를 다 채우지 못한 가용 인원만 필터링
-            valid_open = [s for s in avail_open if staff_counts[s]["open"] + staff_counts[s]["close"] < target_nov_quotas.get(s, 0)]
+            # 엄격한 필터: 아직 쿼터를 다 채우지 않은 사람만 후보로 인정
+            valid_open = [s for s in avail_open if (staff_counts[s]["open"] + staff_counts[s]["close"]) < target_nov_quotas.get(s, 0)]
             
-            if valid_open:
-                # 그중에서 당월 근무(오픈+마감)가 가장 적은 사람 우선 선택
-                valid_open.sort(key=lambda x: staff_counts[x]["open"] + staff_counts[x]["close"])
-                selected_open = valid_open[0]
-            else:
-                selected_open = avail_open[0] if avail_open else ""
+            if not valid_open:
+                generation_failed = True
+                fail_reason = f"날짜 {d_date}({d_name}요일) 오픈 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠거나, 요일별 오픈 가용 인원에 남은 쿼터가 있는 사람이 포함되어 있지 않습니다."
+                break
                 
+            # 쿼터를 아직 덜 채운 사람 중 당월 근무 횟수가 적은 사람 우선
+            valid_open.sort(key=lambda x: (staff_counts[x]["open"] + staff_counts[x]["close"]))
+            selected_open = valid_open[0]
+            
             if selected_open:
                 staff_counts[selected_open]["open"] += 1
                 
@@ -218,16 +212,15 @@ if st.button("2단계: 최종 스케줄 생성하기"):
                 selected_close = "김상혁"
             else:
                 other_avail = [s for s in avail_close if s != "김상혁"]
-                valid_close = [s for s in other_avail if staff_counts[s]["open"] + staff_counts[s]["close"] < target_nov_quotas.get(s, 0)]
+                valid_close = [s for s in other_avail if (staff_counts[s]["open"] + staff_counts[s]["close"]) < target_nov_quotas.get(s, 0)]
                 
-                if valid_close:
-                    valid_close.sort(key=lambda x: staff_counts[x]["open"] + staff_counts[x]["close"])
-                    selected_close = valid_close[0]
-                else:
-                    if d_name in ["월", "수"]:
-                        selected_close = "김상혁"
-                    else:
-                        selected_close = other_avail[0] if other_avail else ""
+                if not valid_close:
+                    generation_failed = True
+                    fail_reason = f"날짜 {d_date}({d_name}요일) 마감 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠거나, 요일별 마감 가용 인원에 남은 쿼터가 있는 사람이 포함되어 있지 않습니다."
+                    break
+                    
+                valid_close.sort(key=lambda x: (staff_counts[x]["open"] + staff_counts[x]["close"]))
+                selected_close = valid_close[0]
             
             if selected_close:
                 staff_counts[selected_close]["close"] += 1
@@ -240,9 +233,23 @@ if st.button("2단계: 최종 스케줄 생성하기"):
                 "마감": selected_close
             })
             
-        st.session_state.schedule_results = schedule_results
-        st.session_state.staff_counts = staff_counts
-        st.success("지정한 당월 목표 횟수에 완벽히 부합하도록 스케줄이 생성되었습니다!")
+        if generation_failed:
+            st.error(f"❌ 스케줄 생성 중단 및 오류 발생!\n\n**상세 원인:**\n{fail_reason}\n\n💡 **해결 방법:** 요일별 가용 인원 설정(1단계)을 넓히거나, 슬라이더에서 특정 인원의 최종 누적 횟수 목표를 재조정해 주세요.")
+        else:
+            # 최종 검증: 생성된 횟수가 사용자가 지정한 쿼터와 1이라도 오차가 있는지 확인
+            mismatch = False
+            for staff, target in target_nov_quotas.items():
+                actual = staff_counts[staff]["open"] + staff_counts[staff]["close"]
+                if actual != target:
+                    mismatch = True
+                    break
+            
+            if mismatch:
+                st.error("❌ 오류: 지정한 목표 쿼터와 실제 생성된 횟수 간에 불일치가 감지되었습니다. 요일별 가용 인원 풀이 너무 좁아 강제 배정이 발생했습니다.")
+            else:
+                st.session_state.schedule_results = schedule_results
+                st.session_state.staff_counts = staff_counts
+                st.success("지정한 최종 누적 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다!")
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
