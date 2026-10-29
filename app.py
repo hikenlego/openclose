@@ -1,118 +1,3 @@
-import streamlit as st
-import pandas as pd
-import datetime
-import calendar
-import os
-import urllib.request
-
-try:
-    import matplotlib.pyplot as plt
-    import matplotlib.font_manager as fm
-    import io
-    HAS_MATPLOTLIB = True
-    
-    font_path = "NanumGothic.ttf"
-    if not os.path.exists(font_path):
-        try:
-            url = "https://github.com/google/fonts/raw/main/ofl/nanumgothic/NanumGothic-Regular.ttf"
-            urllib.request.urlretrieve(url, font_path)
-        except Exception:
-            pass
-
-    if os.path.exists(font_path):
-        fm.fontManager.addfont(font_path)
-        font_name = fm.FontProperties(fname=font_path).get_name()
-        plt.rc('font', family=font_name)
-    else:
-        plt.rc('font', family='sans-serif')
-        
-    plt.rcParams['axes.unicode_minus'] = False
-except ImportError:
-    HAS_MATPLOTLIB = False
-
-st.title("근무 일정 자동 생성 프로그램")
-
-if "schedule_df" not in st.session_state:
-    st.session_state.schedule_df = None
-
-st.header("1. 엑셀 파일 업로드 및 가용 인원 설정")
-uploaded_file = st.file_uploader("근무표 엑셀 파일을 업로드하세요", type=["xlsx", "xls"])
-
-default_open = {
-    "월": ["김범수", "정은성"],
-    "화": ["박라영", "김동환", "허다인"],
-    "수": ["김범수", "박라영", "김동환", "허다인"],
-    "목": ["박라영", "이현준", "김동환"],
-    "금": ["김범수", "박라영", "이현준"]
-}
-
-default_close = {
-    "월": ["김상혁", "박라영", "허다인", "정은성", "김동환"],
-    "화": ["박라영", "이현준", "허다인", "정은성"],
-    "수": ["김범수", "김상혁", "김동환", "정은성"],
-    "목": ["박라영", "이현준", "김동환", "정은성"],
-    "금": ["박라영", "김범수"]
-}
-
-if uploaded_file is not None:
-    try:
-        df_excel = pd.read_excel(uploaded_file)
-        st.write("업로드된 엑셀 파일 미리보기:")
-        st.dataframe(df_excel.head())
-        st.success("엑셀 파일을 성공적으로 읽어왔습니다.")
-    except Exception as e:
-        st.error(f"파일을 읽는 중 오류가 발생했습니다: {e}")
-
-st.subheader("요일별 오픈 가용 인원")
-open_input = {}
-days = ["월", "화", "수", "목", "금"]
-for day in days:
-    default_str = ", ".join(default_open.get(day, []))
-    val = st.text_input(f"오픈 - {day}요일", value=default_str, key=f"open_{day}")
-    open_input[day] = [x.strip() for x in val.split(",") if x.strip()]
-
-st.subheader("요일별 마감 가용 인원")
-close_input = {}
-for day in days:
-    default_str = ", ".join(default_close.get(day, []))
-    val = st.text_input(f"마감 - {day}요일", value=default_str, key=f"close_{day}")
-    close_input[day] = [x.strip() for x in val.split(",") if x.strip()]
-
-st.header("2. 이전 달 누적 횟수 입력 (월별 총계)")
-
-# 1. 직원 이름 목록 정의 (오름차순 정렬)
-staff_names = sorted(list(set([name for sub in open_input.values() for name in sub] + [name for sub in close_input.values() for name in sub])))
-if "김상혁" not in staff_names:
-    staff_names.append("김상혁")
-staff_names = sorted(staff_names)
-
-# 2. [행: 직원 이름, 열: 월(9월~12월)] 구조로 데이터 정의
-# 9월, 10월은 확정 데이터 / 11월, 12월은 빈칸(None) 처리
-raw_data = {
-    "김상혁": {"9월": 8, "10월": 16, "11월": None, "12월": None},
-    "박라영": {"9월": 5, "10월": 10, "11월": None, "12월": None},
-    "김동환": {"9월": 5, "10월": 10, "11월": None, "12월": None},
-    "정은성": {"9월": 5, "10월": 10, "11월": None, "12월": None},
-    "김범수": {"9월": 4, "10월": 10, "11월": None, "12월": None},
-    "허다인": {"9월": 4, "10월": 10, "11월": None, "12월": None},
-    "이현준": {"9월": 4, "10월": 11, "11월": None, "12월": None},
-}
-
-# 데이터프레임 변환 (행: 이름, 열: 9월, 10월, 11월, 12월)
-history_df = pd.DataFrame(raw_data).T  # Transpose하여 행/열 전환
-history_df = history_df[["9월", "10월", "11월", "12월"]]  # 순서 정렬
-history_df.index.name = "이름"
-
-st.info("행은 직원 이름, 열은 월별(9~12월) 총계입니다. 11~12월은 비워둔 상태로 유지됩니다.")
-edited_history = st.data_editor(history_df, key="history_editor")
-
-st.header("3. 일정 생성 및 날짜 설정")
-col1, col2 = st.columns(2)
-with col1:
-    target_year = st.number_input("연도", min_value=2024, max_value=2030, value=2026)
-with col2:
-    target_month = st.number_input("월", min_value=1, max_value=12, value=11)
-
 if st.button("스케줄 생성하기"):
     calendar.setfirstweekday(calendar.SUNDAY)
     cal = calendar.monthcalendar(target_year, target_month)
@@ -134,27 +19,31 @@ if st.button("스케줄 생성하기"):
         else:
             staff_prev[staff] = 0
 
-    # 2. [핵심] 11월 개인별 목표 근무 횟수 사전 할당
-    # 김상혁 씨는 고정 제약이 있으므로 일반 인원 6명(동환, 범수, 라영, 현준, 은성, 다인)을 대상으로 합니다.
-    # 9~10월 누적이 상대적으로 많은 인원(예: 라영, 은성, 현준 등 누적이 높았던 순서)에게 15회 부여, 나머지 16회 부여
-    # 총 영업일수와 김상혁 마감 횟수를 고려하여 15회 2명, 16회 4명으로 정확히 분배합니다.
+    # 2. [핵심] 11월 목표 최종 누적횟수 및 11월 당월 할당 횟수(쿼터) 설정
+    # 총 영업일수 기반 오픈/마감 슬롯과 완벽히 일치하도록 쿼터 설계
+    # 이현준(11) -> 최종 15 (11월 4회)
+    # 박라영(10) -> 최종 15 (11월 5회)
+    # 정은성, 김동환, 김범수, 허다인(각 10) -> 최종 16 (11월 각 6회)
+    target_final_cumulative = {
+        "이현준": 15,
+        "박라영": 15,
+        "정은성": 16,
+        "김동환": 16,
+        "김범수": 16,
+        "허다인": 16
+    }
     
-    general_staff = [s for s in staff_names if s != "김상혁"]
-    # 9~10월 누적치가 높은 순서대로 정렬하여 상위 2명에게 15회 목표 부여
-    general_staff.sort(key=lambda x: staff_prev[x], reverse=True)
-    
-    target_quotas = {}
-    for i, staff in enumerate(general_staff):
-        if i < 2:  # 누적이 상대적으로 많은 상위 2명 (예: 라영, 은성/현준 등)
-            target_quotas[staff] = 15
-        else:
-            target_quotas[staff] = 16
-            
-    # 김상혁 씨는 마감 전담이므로 총 마감 횟수(영업일수와 동일)를 목표로 설정
-    target_quotas["김상혁"] = len(business_days)
+    target_nov_quotas = {}
+    for staff, final_target in target_final_cumulative.items():
+        prev = staff_prev.get(staff, 0)
+        target_nov_quotas[staff] = max(0, final_target - prev)
+        
+    # 김상혁 씨는 월/수 마감 전담 (11월 월/수 마감 총 횟수)
+    sanghyuk_closes = sum(1 for bday in business_days if bday["day_name"] in ["월", "수"])
+    target_nov_quotas["김상혁"] = sanghyuk_closes
 
-    # 초기 상태 설정
-    staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev[staff]} for staff in staff_names}
+    # 초기 상태 설정 (당월 배정 횟수 추적)
+    staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev.get(staff, 0)} for staff in staff_names}
     schedule_results = []
     
     for bday in business_days:
@@ -165,14 +54,17 @@ if st.button("스케줄 생성하기"):
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
         
-        # 정렬 기준: (현재 배정된 오픈 횟수) - (자신의 목표 오픈 쿼터 대비 비율) 또는 잔여 쿼터 부족한 사람 우선
-        # 여기서는 목표 횟수(15 또는 16) 대비 현재까지 채운 횟수의 비율이 가장 낮은 사람을 우선 선택
-        avail_open.sort(key=lambda x: (
-            staff_counts[x]["open"] / target_quotas[x],  # 목표 대비 달성률이 낮을수록 우선
-            staff_counts[x]["open"]                      # 당월 오픈이 적은 순
+        # 아직 11월 쿼터를 다 채우지 못한 사람 우선, 달성률이 낮은 사람 우선
+        eligible_open = [s for s in avail_open if staff_counts[s]["open"] + staff_counts[s]["close"] < target_nov_quotas.get(s, 0)]
+        if not eligible_open:
+            eligible_open = avail_open # 예비용 전체 후보
+            
+        eligible_open.sort(key=lambda x: (
+            (staff_counts[x]["open"] + staff_counts[x]["close"]) / target_nov_quotas.get(x, 1),
+            staff_counts[x]["open"] + staff_counts[x]["close"]
         ))
-        selected_open = avail_open[0] if avail_open else ""
         
+        selected_open = eligible_open[0] if eligible_open else ""
         if selected_open:
             staff_counts[selected_open]["open"] += 1
             
@@ -182,12 +74,17 @@ if st.button("스케줄 생성하기"):
             selected_close = "김상혁"
         else:
             other_avail = [s for s in avail_close if s != "김상혁"]
-            other_avail.sort(key=lambda x: (
-                staff_counts[x]["close"] / target_quotas[x],  # 목표 대비 마감 달성률이 낮을수록 우선
-                staff_counts[x]["close"]                      # 당월 마감이 적은 순
+            eligible_close = [s for s in other_avail if staff_counts[s]["open"] + staff_counts[s]["close"] < target_nov_quotas.get(s, 0)]
+            if not eligible_close:
+                eligible_close = other_avail
+                
+            eligible_close.sort(key=lambda x: (
+                (staff_counts[x]["open"] + staff_counts[x]["close"]) / target_nov_quotas.get(x, 1),
+                staff_counts[x]["open"] + staff_counts[x]["close"]
             ))
-            if other_avail:
-                selected_close = other_avail[0]
+            
+            if eligible_close:
+                selected_close = eligible_close[0]
             else:
                 if d_name in ["월", "수"]:
                     selected_close = "김상혁"
@@ -207,7 +104,7 @@ if st.button("스케줄 생성하기"):
         
     st.session_state.schedule_results = schedule_results
     st.session_state.staff_counts = staff_counts
-    st.success("사전 목표 쿼터제 기반 스케줄이 성공적으로 생성되었습니다!")
+    st.success("최종 누적 쿼터제 기반 스케줄이 성공적으로 생성되었습니다!")
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
@@ -227,7 +124,7 @@ if "schedule_results" in st.session_state:
             "당월 오픈": m_open,
             "당월 마감": m_close,
             "당월 합계": m_total,
-            "누적횟수": total_sum  # '총계' 대신 '누적횟수'로 변경 및 총 오픈/마감 컬럼 제거
+            "누적횟수": total_sum
         })
         
         line_str = f"{staff} / 당월 오픈 {m_open} / 당월 마감 {m_close} / 당월 합계 {m_total} / 누적횟수 {total_sum}"
@@ -242,7 +139,6 @@ if "schedule_results" in st.session_state:
 
     st.header("5. 월간 캘린더 출력 및 이미지 다운로드")
     
-  # 일요일 시작(firstweekday=6)으로 정확하게 달력 매트릭스 생성
     calendar.setfirstweekday(calendar.SUNDAY)
     month_matrix = calendar.monthcalendar(target_year, target_month)
     
