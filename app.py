@@ -80,29 +80,30 @@ for day in days:
 
 st.header("2. 이전 달 누적 횟수 입력 (월별 총계)")
 
+# 1. 직원 이름 목록 정의 (오름차순 정렬)
 staff_names = sorted(list(set([name for sub in open_input.values() for name in sub] + [name for sub in close_input.values() for name in sub])))
 if "김상혁" not in staff_names:
     staff_names.append("김상혁")
 staff_names = sorted(staff_names)
 
-september_vals = {"김상혁": 8, "박라영": 5, "김동환": 5, "정은성": 5, "김범수": 4, "허다인": 4, "이현준": 4}
-october_vals = {"김상혁": 16, "박라영": 10, "김동환": 10, "정은성": 10, "김범수": 10, "허다인": 10, "이현준": 11}
+# 2. [행: 직원 이름, 열: 월(9월~12월)] 구조로 데이터 정의
+# 9월, 10월은 확정 데이터 / 11월, 12월은 빈칸(None) 처리
+raw_data = {
+    "김상혁": {"9월": 8, "10월": 16, "11월": None, "12월": None},
+    "박라영": {"9월": 5, "10월": 10, "11월": None, "12월": None},
+    "김동환": {"9월": 5, "10월": 10, "11월": None, "12월": None},
+    "정은성": {"9월": 5, "10월": 10, "11월": None, "12월": None},
+    "김범수": {"9월": 4, "10월": 10, "11월": None, "12월": None},
+    "허다인": {"9월": 4, "10월": 10, "11월": None, "12월": None},
+    "이현준": {"9월": 4, "10월": 11, "11월": None, "12월": None},
+}
 
-history_rows = []
-for m in ["9월", "10월", "11월", "12월"]:
-    row = {"월": m}
-    for staff in staff_names:
-        if m == "9월":
-            row[staff] = september_vals.get(staff, 0)
-        elif m == "10월":
-            row[staff] = october_vals.get(staff, 0)
-        else:
-            row[staff] = None  # 11월, 12월은 빈칸으로 설정
-    history_rows.append(row)
+# 데이터프레임 변환 (행: 이름, 열: 9월, 10월, 11월, 12월)
+history_df = pd.DataFrame(raw_data).T  # Transpose하여 행/열 전환
+history_df = history_df[["9월", "10월", "11월", "12월"]]  # 순서 정렬
+history_df.index.name = "이름"
 
-history_df = pd.DataFrame(history_rows)
-history_df.set_index("월", inplace=True)
-
+st.info("행은 직원 이름, 열은 월별(9~12월) 총계입니다. 11~12월은 비워둔 상태로 유지됩니다.")
 edited_history = st.data_editor(history_df, key="history_editor")
 
 st.header("3. 일정 생성 및 날짜 설정")
@@ -125,17 +126,12 @@ if st.button("스케줄 생성하기"):
                 day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
-    # [핵심] 가장 최근에 입력된 확정 월(예: 10월)의 누적 총합을 기준(prev_total)으로 가져옴
-    valid_rows = edited_history.dropna(how="all")
-    if not valid_rows.empty:
-        latest_row = valid_rows.iloc[-1] # 가장 최근 행 (10월 데이터)
-    else:
-        latest_row = edited_history.iloc[0]
-
-    staff_counts = {staff: {"open": 0, "close": 0} for staff in all_staff}
-    for staff in all_staff:
-        if staff in staff_names:
-            val = latest_row.get(staff, 0)
+    # [핵심] 수정된 표(행: 이름, 열: 월)에서 가장 최신 확정 월인 '10월' 컬럼의 값을 기준(prev_total)으로 가져옴
+    staff_counts = {staff: {"open": 0, "close": 0} for staff in staff_names}
+    for staff in staff_names:
+        if staff in edited_history.index:
+            # 10월 데이터를 기준으로 직전 누적치 설정 (값이 없으면 0)
+            val = edited_history.loc[staff, "10월"]
             prev_total = int(val) if pd.notna(val) else 0
         else:
             prev_total = 0
@@ -150,14 +146,12 @@ if st.button("스케줄 생성하기"):
         d_name = bday["day_name"]
         d_date = bday["date"]
         
-        # [오픈 배정 정렬 로직 보완]
-        # 1순위: (기존 누적 총합 + 당월 배정 횟수)가 적은 사람
-        # 2순위: 동점일 경우 9월~10월에 누적된 과거 총합이 더 적었던 사람을 우선 배정하여 순번 밀림 방지
+        # 오픈 배정 (총합 기준 + 9~10월 과거 누적치 반영 정렬)
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
         avail_open.sort(key=lambda x: (
             staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
-            staff_counts[x]["prev_total"],  # 과거 누적치가 적은 사람 우선
+            staff_counts[x]["prev_total"],
             staff_counts[x]["open"] + staff_counts[x]["close"]
         ))
         selected_open = avail_open[0] if avail_open else ""
@@ -165,7 +159,7 @@ if st.button("스케줄 생성하기"):
         if selected_open:
             staff_counts[selected_open]["open"] += 1
             
-        # [마감 배정 정렬 로직 보완] (김상혁 월/수 고정 제약 반영)
+        # 마감 배정 (김상혁 월/수 고정 제약 반영)
         avail_close = close_input.get(d_name, [])
         if d_name in ["월", "수"] and "김상혁" in avail_close:
             selected_close = "김상혁"
@@ -173,7 +167,7 @@ if st.button("스케줄 생성하기"):
             other_avail = [s for s in avail_close if s != "김상혁"]
             other_avail.sort(key=lambda x: (
                 staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
-                staff_counts[x]["prev_total"],  # 과거 누적치가 적은 사람 우선
+                staff_counts[x]["prev_total"],
                 staff_counts[x]["open"] + staff_counts[x]["close"]
             ))
             if other_avail:
