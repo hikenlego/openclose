@@ -133,43 +133,70 @@ if st.button("1단계: 날짜 설정 및 기준 계산하기"):
             staff_prev[staff] = 0
             
     st.session_state.staff_prev = staff_prev
-    st.success("기준 날짜와 이전 누적 데이터가 계산되었습니다. 아래 슬라이더에서 인원별 최종 누적 횟수를 조정하세요.")
+    st.success("기준 날짜와 이전 누적 데이터가 계산되었습니다. 아래에서 슬라이더 기준 방식을 선택하고 목표를 조정하세요.")
 
 if "business_days" in st.session_state and "staff_prev" in st.session_state:
-    st.subheader("인원별 당월 기준 최종 누적 횟수 조정 (슬라이더)")
+    st.subheader("인원별 목표 횟수 조정 (슬라이더)")
+    
+    # 토글 방식 셀렉터 추가
+    slider_mode = st.radio(
+        "슬라이더 기준 방식을 선택하세요:",
+        ["당월 총 횟수 기준", "최종 누적 횟수 기준"],
+        horizontal=True
+    )
     
     total_business_days = len(st.session_state.business_days)
     sanghyuk_closes = sum(1 for bday in st.session_state.business_days if bday["day_name"] in ["월", "수"])
-    
     general_staff = [s for s in staff_names if s != "김상혁"]
     
     st.info(f"총 영업일수: {total_business_days}일 (오픈 총 {total_business_days}개, 일반 마감 총 {total_business_days - sanghyuk_closes}개)")
     
     user_final_cumulatives = {}
     
-    current_slider_sum = 0
-    for i, staff in enumerate(general_staff):
-        prev = st.session_state.staff_prev.get(staff, 0)
-        default_final = 15 if staff in ["이현준", "박라영"] else 16
+    if slider_mode == "최종 누적 횟수 기준":
+        for i, staff in enumerate(general_staff):
+            prev = st.session_state.staff_prev.get(staff, 0)
+            default_final = 15 if staff in ["이현준", "박라영"] else 16
+            val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=prev, max_value=prev+15, value=default_final, key=f"cumul_slider_{staff}")
+            user_final_cumulatives[staff] = val
+
+        sk_prev = st.session_state.staff_prev.get("김상혁", 0)
+        sk_final = sk_prev + sanghyuk_closes
+        st.markdown(f"김상혁 (월/수 마감 전담): 이전 누적 {sk_prev}회 + 당월 마감 {sanghyuk_closes}회 = 최종 누적 {sk_final}회 (자동 고정)")
+        user_final_cumulatives["김상혁"] = sk_final
+
+        total_open_slots = total_business_days
+        total_general_close_slots = total_business_days - sanghyuk_closes
+        total_assigned_nov = sum(user_final_cumulatives[s] - st.session_state.staff_prev.get(s, 0) for s in general_staff)
+        required_nov = total_open_slots + total_general_close_slots
+
+        if total_assigned_nov != required_nov:
+            st.warning(f"현재 설정된 일반 인원 총 당월 근무 횟수({total_assigned_nov}회)가 배치해야 할 총 슬롯 수({required_nov}회)와 일치하지 않습니다. 오차: {total_assigned_nov - required_nov}회.")
+        else:
+            st.success("일반 인원 총 당월 근무 횟수가 완벽하게 일치합니다.")
+
+    else:  # 당월 총 횟수 기준
+        total_open_slots = total_business_days
+        total_general_close_slots = total_business_days - sanghyuk_closes
+        required_nov = total_open_slots + total_general_close_slots
         
-        val = st.slider(f"{staff} (이전 누적: {prev}회)", min_value=prev, max_value=prev+15, value=default_final, key=f"cumul_slider_{staff}")
-        user_final_cumulatives[staff] = val
-        current_slider_sum += (val - prev)
+        target_nov_quotas_temp = {}
+        for i, staff in enumerate(general_staff):
+            prev = st.session_state.staff_prev.get(staff, 0)
+            default_nov = 5 if staff in ["이현준", "박라영"] else 6
+            val = st.slider(f"{staff} (당월 목표 횟수)", min_value=0, max_value=15, value=default_nov, key=f"nov_slider_{staff}")
+            target_nov_quotas_temp[staff] = val
+            user_final_cumulatives[staff] = prev + val
 
-    sk_prev = st.session_state.staff_prev.get("김상혁", 0)
-    sk_final = sk_prev + sanghyuk_closes
-    st.markdown(f"김상혁 (월/수 마감 전담): 이전 누적 {sk_prev}회 + 당월 마감 {sanghyuk_closes}회 = 최종 누적 {sk_final}회 (자동 고정)")
-    user_final_cumulatives["김상혁"] = sk_final
+        sk_prev = st.session_state.staff_prev.get("김상혁", 0)
+        user_final_cumulatives["김상혁"] = sk_prev + sanghyuk_closes
+        st.markdown(f"김상혁 (월/수 마감 전담): 당월 마감 {sanghyuk_closes}회 (자동 고정)")
 
-    total_open_slots = total_business_days
-    total_general_close_slots = total_business_days - sanghyuk_closes
-    total_assigned_nov = sum(user_final_cumulatives[s] - st.session_state.staff_prev.get(s, 0) for s in general_staff)
-    required_nov = total_open_slots + total_general_close_slots
-
-    if total_assigned_nov != required_nov:
-        st.warning(f"현재 슬라이더로 설정된 일반 인원 총 당월 근무 횟수({total_assigned_nov}회)가 배치해야 할 총 슬롯 수({required_nov}회)와 일치하지 않습니다. 오차: {total_assigned_nov - required_nov}회. 슬라이더 조정을 통해 합계를 맞춰주세요.")
-    else:
-        st.success("일반 인원 총 당월 근무 횟수가 완벽하게 일치합니다.")
+        total_assigned_nov = sum(target_nov_quotas_temp.values())
+        if total_assigned_nov != required_nov:
+            st.warning(f"현재 설정된 일반 인원 총 당월 근무 횟수({total_assigned_nov}회)가 배치해야 할 총 슬롯 수({required_nov}회)와 일치하지 않습니다. 오차: {total_assigned_nov - required_nov}회.")
+        else:
+            st.success("일반 인원 총 당월 근무 횟수가 완벽하게 일치합니다.")
 
     if st.button("2단계: 최종 스케줄 생성하기"):
         business_days = st.session_state.business_days
@@ -197,7 +224,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
             if not valid_open:
                 generation_failed = True
                 fail_day_name = d_name
-                fail_reason = f"날짜 {d_date}({d_name}요일) 오픈 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠거나, 요일별 오픈 가용 인원에 남은 쿼터가 있는 사람이 포함되어 있지 않습니다."
+                fail_reason = f"날짜 {d_date}({d_name}요일) 오픈 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠습니다."
                 break
                 
             valid_open.sort(key=lambda x: (staff_counts[x]["open"] + staff_counts[x]["close"]))
@@ -217,7 +244,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
                 if not valid_close:
                     generation_failed = True
                     fail_day_name = d_name
-                    fail_reason = f"날짜 {d_date}({d_name}요일) 마감 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠거나, 요일별 마감 가용 인원에 남은 쿼터가 있는 사람이 포함되어 있지 않습니다."
+                    fail_reason = f"날짜 {d_date}({d_name}요일) 마감 배정 실패: 가용한 인원 전원이 이미 지정된 당월 목표 횟수(쿼터)를 모두 채웠습니다."
                     break
                     
                 valid_close.sort(key=lambda x: (staff_counts[x]["open"] + staff_counts[x]["close"]))
@@ -246,21 +273,17 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
             
             status_str = "\n".join(status_details) if status_details else "- 가용 인원 없음"
             
+            # 늘려야 할 후보: 해당 요일 마감 가용 인원 전체 나열
             suggestion_staff_list = [s for s in avail_close_staff if not (s == "김상혁" and fail_day_name in ["월", "수"])]
+            # 줄여야 할 후보: 현재 목표 쿼터가 1 이상인 모든 일반 인원 나열
             reducible_staff_list = [s for s in general_staff if target_nov_quotas.get(s, 0) > 1]
             
             suggestion_str = ""
             if suggestion_staff_list and reducible_staff_list:
-                inc_example = suggestion_staff_list[0]
-                dec_candidates = [s for s in reducible_staff_list if s not in suggestion_staff_list]
-                if not dec_candidates:
-                    dec_candidates = reducible_staff_list
-                dec_example = dec_candidates[0]
-                
                 suggestion_str = (
-                    f"제언: 현재 {fail_day_name}요일 마감에 투입 가능한 인원({', '.join(suggestion_staff_list)}) 모두가 쿼터를 채워 막혔습니다.\n"
-                    f"- 늘려야 할 사람: 슬라이더에서 {inc_example} 씨의 최종 누적 횟수 목표를 늘려주세요.\n"
-                    f"- 줄여야 할 사람: 전체 총합 유지를 위해 {dec_example} 씨의 최종 누적 횟수 목표를 그만큼 줄여주세요."
+                    f"제언: 현재 {fail_day_name}요일 마감에 투입 가능한 모든 인원이 쿼터를 다 채웠습니다.\n"
+                    f"- **[늘려야 할 후보 인원]** (아래 중 택 1하여 목표를 늘려주세요):\n  {', '.join([f'**{s}**' for s in suggestion_staff_list])}\n"
+                    f"- **[줄여야 할 후보 인원]** (총합 유지를 위해 아래 중 택 1하여 목표를 줄여주세요):\n  {', '.join([f'**{s}**' for s in reducible_staff_list])}"
                 )
             else:
                 suggestion_str = "제언: 슬라이더에서 전체 인원의 누적 횟수 목표를 재조정하여 요일별 가용 인원과 쿼터 균형을 맞춰주세요."
@@ -280,11 +303,11 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
                     break
             
             if mismatch:
-                st.error("오류: 지정한 목표 쿼터와 실제 생성된 횟수 간에 불일치가 감지되었습니다. 요일별 가용 인원 풀이 너무 좁아 강제 배정이 발생했습니다.")
+                st.error("오류: 지정한 목표 쿼터와 실제 생성된 횟수 간에 불일치가 감지되었습니다.")
             else:
                 st.session_state.schedule_results = schedule_results
                 st.session_state.staff_counts = staff_counts
-                st.success("지정한 최종 누적 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다.")
+                st.success("지정한 쿼터에 100% 오차 없이 완벽히 일치하도록 스케줄이 생성되었습니다.")
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
@@ -340,7 +363,7 @@ if "schedule_results" in st.session_state:
                 else:
                     info = sched_dict.get(day, None)
                     if info:
-                        text_val = f"{day}일\n오픈: {info['오픈']}\n마감: {info['마감']}"
+                        text_val = f"{day}일\n오픈: {info['о픈'] if 'о픈' in info else info['오픈']}\n마감: {info['마감']}"
                     else:
                         text_val = f"{day}일\n(휴무)"
                     row_str.append(text_val)
