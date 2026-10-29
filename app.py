@@ -114,7 +114,6 @@ with col2:
     target_month = st.number_input("월", min_value=1, max_value=12, value=11)
 
 if st.button("스케줄 생성하기"):
-    # 일요일 시작 기준으로 영업일(월~금) 추출
     calendar.setfirstweekday(calendar.SUNDAY)
     cal = calendar.monthcalendar(target_year, target_month)
     business_days = []
@@ -126,7 +125,6 @@ if st.button("스케줄 생성하기"):
                 day_name = ["일", "월", "화", "수", "목", "금", "토"][i]
                 business_days.append({"date": date_obj, "day_name": day_name, "day_num": day})
     
-    # 10월 데이터 기준 직전 누적치(prev_total) 불러오기
     staff_counts = {staff: {"open": 0, "close": 0} for staff in staff_names}
     for staff in staff_names:
         if staff in edited_history.index:
@@ -145,21 +143,19 @@ if st.button("스케줄 생성하기"):
         d_name = bday["day_name"]
         d_date = bday["date"]
         
-        # [정렬 로직 개선] 
-        # 1순위: (이전 누적 + 당월 배정) 총합이 적은 사람 우선
-        # 2순위: 총합이 같다면, 이전 누적치(prev_total)가 적었던 사람을 우선하여 형평성 유지
+        # 오픈 배정 정렬: 전체 누적 총합 오름차순, 동점시 당월 배정 적은 순
         avail_open = open_input.get(d_name, [])
         avail_open = [s for s in avail_open if s != "김상혁"]
         avail_open.sort(key=lambda x: (
             staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
-            staff_counts[x]["prev_total"]
+            staff_counts[x]["open"] + staff_counts[x]["close"]
         ))
         selected_open = avail_open[0] if avail_open else ""
         
         if selected_open:
             staff_counts[selected_open]["open"] += 1
             
-        # 마감 배정 (김상혁 월/수 고정 제약 반영)
+        # 마감 배정 정렬 (김상혁 월/수 고정 제약 반영)
         avail_close = close_input.get(d_name, [])
         if d_name in ["월", "수"] and "김상혁" in avail_close:
             selected_close = "김상혁"
@@ -167,7 +163,7 @@ if st.button("스케줄 생성하기"):
             other_avail = [s for s in avail_close if s != "김상혁"]
             other_avail.sort(key=lambda x: (
                 staff_counts[x]["prev_total"] + staff_counts[x]["open"] + staff_counts[x]["close"],
-                staff_counts[x]["prev_total"]
+                staff_counts[x]["open"] + staff_counts[x]["close"]
             ))
             if other_avail:
                 selected_close = other_avail[0]
