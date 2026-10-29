@@ -179,54 +179,55 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
     else:
         st.success("✨ 일반 인원 총 당월 근무 횟수가 완벽하게 일치합니다!")
 
-    if st.button("2단계: 최종 스케줄 생성하기"):
+if st.button("2단계: 최종 스케줄 생성하기"):
         business_days = st.session_state.business_days
         staff_prev = st.session_state.staff_prev
         
+        # 1단계: 슬라이더로 지정한 최종 누적 횟수로부터 '개인별 당월 목표 횟수'를 정확하게 도출
         target_nov_quotas = {staff: user_final_cumulatives[staff] - staff_prev.get(staff, 0) for staff in staff_names}
         
-        staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev.get(staff, 0)} for staff in staff_names}
+        # 날짜별 초기화
         schedule_results = []
+        staff_counts = {staff: {"open": 0, "close": 0, "prev_total": staff_prev.get(staff, 0)} for staff in staff_names}
         
+        # 날짜 순회하며 배정
         for bday in business_days:
             d_name = bday["day_name"]
             d_date = bday["date"]
             
-            # 오픈 배정
+            # --- [오픈 배정] ---
             avail_open = open_input.get(d_name, [])
             avail_open = [s for s in avail_open if s != "김상혁"]
             
-            # 정렬 기준 변경: 이미 목표 쿼터를 채운 사람은 우선순위 1(맨 뒤), 안 채운 사람은 0(우선 선택)
-            avail_open.sort(key=lambda x: (
-                1 if (staff_counts[x]["open"] + staff_counts[x]["close"]) >= target_nov_quotas.get(x, 0) else 0,
-                (staff_counts[x]["open"] + staff_counts[x]["close"]) / max(1, target_nov_quotas.get(x, 1)),
-                staff_counts[x]["open"] + staff_counts[x]["close"]
-            ))
+            # 아직 당월 목표 횟수를 다 채우지 못한 가용 인원만 필터링
+            valid_open = [s for s in avail_open if staff_counts[s]["open"] + staff_counts[s]["close"] < target_nov_quotas.get(s, 0)]
             
-            selected_open = avail_open[0] if avail_open else ""
+            if valid_open:
+                # 그중에서 당월 근무(오픈+마감)가 가장 적은 사람 우선 선택
+                valid_open.sort(key=lambda x: staff_counts[x]["open"] + staff_counts[x]["close"])
+                selected_open = valid_open[0]
+            else:
+                selected_open = avail_open[0] if avail_open else ""
+                
             if selected_open:
                 staff_counts[selected_open]["open"] += 1
                 
-            # 마감 배정
+            # --- [마감 배정] ---
             avail_close = close_input.get(d_name, [])
             if d_name in ["월", "수"] and "김상혁" in avail_close:
                 selected_close = "김상혁"
             else:
                 other_avail = [s for s in avail_close if s != "김상혁"]
+                valid_close = [s for s in other_avail if staff_counts[s]["open"] + staff_counts[s]["close"] < target_nov_quotas.get(s, 0)]
                 
-                other_avail.sort(key=lambda x: (
-                    1 if (staff_counts[x]["open"] + staff_counts[x]["close"]) >= target_nov_quotas.get(x, 0) else 0,
-                    (staff_counts[x]["open"] + staff_counts[x]["close"]) / max(1, target_nov_quotas.get(x, 1)),
-                    staff_counts[x]["open"] + staff_counts[x]["close"]
-                ))
-                
-                if other_avail:
-                    selected_close = other_avail[0]
+                if valid_close:
+                    valid_close.sort(key=lambda x: staff_counts[x]["open"] + staff_counts[x]["close"])
+                    selected_close = valid_close[0]
                 else:
                     if d_name in ["월", "수"]:
                         selected_close = "김상혁"
                     else:
-                        selected_close = ""
+                        selected_close = other_avail[0] if other_avail else ""
             
             if selected_close:
                 staff_counts[selected_close]["close"] += 1
@@ -241,7 +242,7 @@ if "business_days" in st.session_state and "staff_prev" in st.session_state:
             
         st.session_state.schedule_results = schedule_results
         st.session_state.staff_counts = staff_counts
-        st.success("지정한 최종 누적 쿼터에 정확히 맞춰 스케줄이 생성되었습니다!")
+        st.success("지정한 당월 목표 횟수에 완벽히 부합하도록 스케줄이 생성되었습니다!")
 
 if "schedule_results" in st.session_state:
     st.header("4. 개인별 근무 횟수 통계 및 복사 양식")
