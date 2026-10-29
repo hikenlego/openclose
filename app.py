@@ -114,7 +114,7 @@ with col2:
     target_month = st.number_input("월", min_value=1, max_value=12, value=11)
 
 if st.button("스케줄 생성하기"):
-    cal = calendar.Calendar(firstweekday=6).monthcalendar(target_year, target_month)
+    cal = calendar.monthcalendar(target_year, target_month)
     business_days = []
     
     for week in cal:
